@@ -28,16 +28,67 @@ if Code.ensure_loaded?(Postgrex) do
     alias Ecto.Query
     alias Ecto.Query.{BooleanExpr, JoinExpr, QueryExpr}
 
-    defdelegate all(query), to: Postgres
-    defdelegate update_all(query), to: Postgres
-    defdelegate insert(prefix, table, header, rows, on_conflict, returning), to: Postgres
-    defdelegate update(prefix, table, fields, filters, returning), to: Postgres
-    defdelegate delete(prefix, table, filters, returning), to: Postgres
+    def all(query) do
+      sources = create_names(query)
+      {select_distinct, order_by_distinct} = distinct(query.distinct, sources, query)
 
-    def delete_all(%Query{select: %{fields: _fields}} = query),
-      do: error!(query, "Redshift doesn't support RETURNING")
+      from = from(query, sources)
+      select = select(query, select_distinct, sources)
+      join = join(query, sources)
+      where = where(query, sources)
+      group_by = group_by(query, sources)
+      having = having(query, sources)
+      order_by = order_by(query, order_by_distinct, sources)
+      limit = limit(query, sources)
+      offset = offset(query, sources)
+      lock = lock(query.lock)
 
-    def delete_all(%{from: from} = query) do
+      [select, from, join, where, group_by, having, order_by, limit, offset | lock]
+    end
+
+    def update_all(query, prefix \\ nil)
+
+    def update_all(%{from: from, select: nil} = query, prefix) do
+      sources = create_names(query)
+      {from, name} = get_source(query, sources, 0, from)
+
+      prefix = prefix || ["UPDATE ", from, " AS ", name | " SET "]
+      fields = update_fields(query, sources)
+      {join, wheres} = using_join(query, :update_all, "FROM", sources)
+      where = where(%{query | wheres: wheres ++ query.wheres}, sources)
+
+      [prefix, fields, join, where]
+    end
+
+    def update_all(_query, _prefix) do
+      error!(nil, "RETURNING is not supported by Redshift")
+    end
+
+    def update(prefix, table, fields, filters, []) do
+      {fields, count} =
+        intersperse_reduce(fields, ", ", 1, fn field, acc ->
+          {[quote_name(field), " = $" | Integer.to_string(acc)], acc + 1}
+        end)
+
+      {filters, _count} =
+        intersperse_reduce(filters, " AND ", count, fn field, acc ->
+          {[quote_name(field), " = $" | Integer.to_string(acc)], acc + 1}
+        end)
+
+      [
+        "UPDATE ",
+        quote_table(prefix, table),
+        " SET ",
+        fields,
+        " WHERE " | filters
+      ]
+    end
+
+    def update(_prefix, _table, _fields, _filters, _returning) do
+      error!(nil, "RETURNING is not supported by Redshift")
+    end
+
+    def delete_all(%{from: from, select: nil} = query) do
       sources = sources_unaliased(query)
       {from, _} = get_source(query, sources, 0, from)
 
@@ -45,6 +96,97 @@ if Code.ensure_loaded?(Postgrex) do
       where = where(%{query | wheres: wheres ++ query.wheres}, sources)
 
       ["DELETE FROM ", from, join, where]
+    end
+
+    def delete_all(_query) do
+      error!(nil, "RETURNING is not supported by Redshift")
+    end
+
+    def delete(prefix, table, filters, []) do
+      {filters, _} =
+        intersperse_reduce(filters, " AND ", 1, fn field, acc ->
+          {[quote_name(field), " = $" | Integer.to_string(acc)], acc + 1}
+        end)
+
+      ["DELETE FROM ", quote_table(prefix, table), " WHERE " | filters]
+    end
+
+    def delete(_prefix, _table, _filters, _returning) do
+      error!(nil, "RETURNING is not supported by Redshift")
+    end
+
+    def insert(prefix, table, header, rows, on_conflict, []) do
+      values =
+        if header == [] do
+          [" VALUES " | intersperse_map(rows, ?,, fn _ -> "(DEFAULT)" end)]
+        else
+          [?\s, ?(, intersperse_map(header, ?,, &quote_name/1), ") VALUES " | insert_all(rows, 1)]
+        end
+
+      [
+        "INSERT INTO ",
+        quote_table(prefix, table),
+        insert_as(on_conflict),
+        values | on_conflict(on_conflict, header)
+      ]
+    end
+
+    def insert(_prefix, _table, _header, _rows, _on_conflict, _returning) do
+      error!(nil, "RETURNING is not supported by Redshift")
+    end
+
+    defp insert_as({%{from: from} = query, _, _}) do
+      {_, name} = get_source(%{query | joins: []}, create_names(query), 0, from)
+      [" AS " | name]
+    end
+
+    defp insert_as({_, _, _}) do
+      []
+    end
+
+    defp on_conflict({:raise, _, []}, _header), do: []
+
+    defp on_conflict({:nothing, _, targets}, _header),
+      do: [" ON CONFLICT ", conflict_target(targets) | "DO NOTHING"]
+
+    defp on_conflict({:replace_all, _, targets}, header),
+      do: [" ON CONFLICT ", conflict_target(targets), "DO " | replace_all(header)]
+
+    defp on_conflict({query, _, targets}, _header),
+      do: [" ON CONFLICT ", conflict_target(targets), "DO " | update_all(query, "UPDATE SET ")]
+
+    defp conflict_target({:constraint, constraint}),
+      do: ["ON CONSTRAINT ", quote_name(constraint), ?\s]
+
+    defp conflict_target([]), do: []
+    defp conflict_target(targets), do: [?(, intersperse_map(targets, ?,, &quote_name/1), ?), ?\s]
+
+    defp replace_all(header) do
+      [
+        "UPDATE SET "
+        | intersperse_map(header, ?,, fn field ->
+            quoted = quote_name(field)
+            [quoted, " = ", "EXCLUDED." | quoted]
+          end)
+      ]
+    end
+
+    defp insert_all(rows, counter) do
+      intersperse_reduce(rows, ?,, counter, fn row, counter ->
+        {row, counter} = insert_each(row, counter)
+        {[?(, row, ?)], counter}
+      end)
+      |> elem(0)
+    end
+
+    defp insert_each(values, counter) do
+      intersperse_reduce(values, ?,, counter, fn
+        nil, counter ->
+          {"DEFAULT", counter}
+
+        _, counter ->
+          {[?$ | Integer.to_string(counter)], counter + 1}
+      end)
     end
 
     ## Query generation
@@ -69,6 +211,68 @@ if Code.ensure_loaded?(Postgrex) do
     end)
 
     defp handle_call(fun, _arity), do: {:fun, Atom.to_string(fun)}
+
+    defp select(%Query{select: %{fields: fields}} = query, select_distinct, sources) do
+      ["SELECT", select_distinct, ?\s | select_fields(fields, sources, query)]
+    end
+
+    defp select_fields([], _sources, _query), do: "TRUE"
+
+    defp select_fields(fields, sources, query) do
+      intersperse_map(fields, ", ", fn
+        {key, value} ->
+          [expr(value, sources, query), " AS " | quote_name(key)]
+
+        value ->
+          expr(value, sources, query)
+      end)
+    end
+
+    defp distinct(nil, _, _), do: {[], []}
+    defp distinct(%QueryExpr{expr: []}, _, _), do: {[], []}
+    defp distinct(%QueryExpr{expr: true}, _, _), do: {" DISTINCT", []}
+    defp distinct(%QueryExpr{expr: false}, _, _), do: {[], []}
+
+    defp distinct(%QueryExpr{expr: exprs}, sources, query) do
+      {[
+         " DISTINCT ON (",
+         intersperse_map(exprs, ", ", fn {_, expr} -> expr(expr, sources, query) end),
+         ?)
+       ], exprs}
+    end
+
+    defp from(%{from: from} = query, sources) do
+      {from, name} = get_source(query, sources, 0, from)
+      [" FROM ", from, " AS " | name]
+    end
+
+    defp update_fields(%Query{updates: updates} = query, sources) do
+      for(
+        %{expr: expr} <- updates,
+        {op, kw} <- expr,
+        {key, value} <- kw,
+        do: update_op(op, key, value, sources, query)
+      )
+      |> Enum.intersperse(", ")
+    end
+
+    defp update_op(:set, key, value, sources, query) do
+      [quote_name(key), " = " | expr(value, sources, query)]
+    end
+
+    defp update_op(:inc, key, value, sources, query) do
+      [
+        quote_name(key),
+        " = ",
+        quote_qualified_name(key, sources, 0),
+        " + "
+        | expr(value, sources, query)
+      ]
+    end
+
+    defp update_op(command, _key, _value, _sources, query) do
+      error!(query, "Unknown update operation #{inspect(command)} for Redshift")
+    end
 
     defp using_join(%Query{joins: []}, _kind, _prefix, _sources), do: {[], []}
 
@@ -99,7 +303,7 @@ if Code.ensure_loaded?(Postgrex) do
             [join, " AS " | name]
 
           %JoinExpr{qual: qual} ->
-            error!(query, "PostgreSQL supports only inner joins on #{kind}, got: `#{qual}`")
+            error!(query, "Redshift supports only inner joins on #{kind}, got: `#{qual}`")
         end)
 
       wheres =
@@ -110,13 +314,84 @@ if Code.ensure_loaded?(Postgrex) do
       {[?\s, prefix, ?\s | froms], wheres}
     end
 
-    defp where(%Query{select: %{fields: _}, wheres: wheres} = query, sources) do
-      boolean(" OOPS WHERE ", wheres, sources, query)
+    defp join(%Query{joins: []}, _sources), do: []
+
+    defp join(%Query{joins: joins} = query, sources) do
+      [
+        ?\s
+        | intersperse_map(joins, ?\s, fn %JoinExpr{
+                                           on: %QueryExpr{expr: expr},
+                                           qual: qual,
+                                           ix: ix,
+                                           source: source
+                                         } ->
+            {join, name} = get_source(query, sources, ix, source)
+            [join_qual(qual), join, " AS ", name, " ON " | expr(expr, sources, query)]
+          end)
+      ]
     end
+
+    defp join_qual(:inner), do: "INNER JOIN "
+    defp join_qual(:inner_lateral), do: "INNER JOIN LATERAL "
+    defp join_qual(:left), do: "LEFT OUTER JOIN "
+    defp join_qual(:left_lateral), do: "LEFT OUTER JOIN LATERAL "
+    defp join_qual(:right), do: "RIGHT OUTER JOIN "
+    defp join_qual(:full), do: "FULL OUTER JOIN "
+    defp join_qual(:cross), do: "CROSS JOIN "
 
     defp where(%Query{wheres: wheres} = query, sources) do
       boolean(" WHERE ", wheres, sources, query)
     end
+
+    defp having(%Query{havings: havings} = query, sources) do
+      boolean(" HAVING ", havings, sources, query)
+    end
+
+    defp group_by(%Query{group_bys: []}, _sources), do: []
+
+    defp group_by(%Query{group_bys: group_bys} = query, sources) do
+      [
+        " GROUP BY "
+        | intersperse_map(group_bys, ", ", fn %QueryExpr{expr: expr} ->
+            intersperse_map(expr, ", ", &expr(&1, sources, query))
+          end)
+      ]
+    end
+
+    defp order_by(%Query{order_bys: []}, _distinct, _sources), do: []
+
+    defp order_by(%Query{order_bys: order_bys} = query, distinct, sources) do
+      order_bys = Enum.flat_map(order_bys, & &1.expr)
+
+      [
+        " ORDER BY "
+        | intersperse_map(distinct ++ order_bys, ", ", &order_by_expr(&1, sources, query))
+      ]
+    end
+
+    defp order_by_expr({dir, expr}, sources, query) do
+      str = expr(expr, sources, query)
+
+      case dir do
+        :asc -> str
+        :desc -> [str | " DESC"]
+      end
+    end
+
+    defp limit(%Query{limit: nil}, _sources), do: []
+
+    defp limit(%Query{limit: %QueryExpr{expr: expr}} = query, sources) do
+      [" LIMIT " | expr(expr, sources, query)]
+    end
+
+    defp offset(%Query{offset: nil}, _sources), do: []
+
+    defp offset(%Query{offset: %QueryExpr{expr: expr}} = query, sources) do
+      [" OFFSET " | expr(expr, sources, query)]
+    end
+
+    defp lock(nil), do: []
+    defp lock(lock_clause), do: [?\s | lock_clause]
 
     defp boolean(_name, [], _sources, _query), do: []
 
@@ -154,7 +429,7 @@ if Code.ensure_loaded?(Postgrex) do
 
       error!(
         query,
-        "PostgreSQL does not support selecting all fields from #{source} without a schema. " <>
+        "Redshift does not support selecting all fields from #{source} without a schema. " <>
           "Please specify a schema or specify exactly which fields you want to select"
       )
     end
@@ -168,12 +443,17 @@ if Code.ensure_loaded?(Postgrex) do
       [expr(left, sources, query), " IN (", args, ?)]
     end
 
-    defp expr({:in, _, [left, {:^, _, [ix, _]}]}, sources, query) do
-      [expr(left, sources, query), " = ANY($", Integer.to_string(ix + 1), ?)]
+    defp expr({:in, _, [_, {:^, _, [_, 0]}]}, _sources, _query) do
+      "false"
+    end
+
+    defp expr({:in, _, [left, {:^, _, [ix, length]}]}, sources, query) do
+      args = (ix + 1)..(ix + length) |> Enum.map(&"$#{&1}") |> Enum.intersperse(?,)
+      [expr(left, sources, query), " IN (", args, ?)]
     end
 
     defp expr({:in, _, [left, right]}, sources, query) do
-      [expr(left, sources, query), " = ANY(", expr(right, sources, query), ?)]
+      [expr(left, sources, query), " IN ", paren_expr(right, sources, query)]
     end
 
     defp expr({:is_nil, _, [arg]}, sources, query) do
@@ -189,7 +469,7 @@ if Code.ensure_loaded?(Postgrex) do
     end
 
     defp expr({:fragment, _, [kw]}, _sources, query) when is_list(kw) or tuple_size(kw) == 3 do
-      error!(query, "PostgreSQL adapter does not support keyword or interpolated fragments")
+      error!(query, "Redshift adapter does not support keyword or interpolated fragments")
     end
 
     defp expr({:fragment, _, parts}, sources, query) do
@@ -234,8 +514,8 @@ if Code.ensure_loaded?(Postgrex) do
       end
     end
 
-    defp expr(list, sources, query) when is_list(list) do
-      ["ARRAY[", intersperse_map(list, ?,, &expr(&1, sources, query)), ?]]
+    defp expr(list, _sources, query) when is_list(list) do
+      error!(query, "Array type is not supported by Redshift")
     end
 
     defp expr(%Decimal{} = decimal, _sources, _query) do
@@ -267,7 +547,6 @@ if Code.ensure_loaded?(Postgrex) do
       [Float.to_string(literal) | "::float"]
     end
 
-    defp tagged_to_db({:array, type}), do: [tagged_to_db(type), ?[, ?]]
     # Always use the largest possible type for integers
     defp tagged_to_db(:id), do: "bigint"
     defp tagged_to_db(:integer), do: "bigint"
@@ -319,6 +598,35 @@ if Code.ensure_loaded?(Postgrex) do
       []
     end
 
+    defp create_names(%{prefix: prefix, sources: sources}) do
+      create_names(prefix, sources, 0, tuple_size(sources)) |> List.to_tuple()
+    end
+
+    defp create_names(prefix, sources, pos, limit) when pos < limit do
+      current =
+        case elem(sources, pos) do
+          {table, schema} ->
+            name = [create_alias(table) | Integer.to_string(pos)]
+            {quote_table(prefix, table), name, schema}
+
+          {:fragment, _, _} ->
+            {nil, [?f | Integer.to_string(pos)], nil}
+
+          %Ecto.SubQuery{} ->
+            {nil, [?s | Integer.to_string(pos)], nil}
+        end
+
+      [current | create_names(prefix, sources, pos + 1, limit)]
+    end
+
+    defp create_names(_prefix, _sources, pos, pos), do: []
+
+    defp create_alias(<<first, _rest::binary>>) when first in ?a..?z when first in ?A..?Z do
+      <<first>>
+    end
+
+    defp create_alias(_), do: "t"
+
     ## DDL
 
     defdelegate execute_ddl(command), to: Postgres
@@ -367,11 +675,24 @@ if Code.ensure_loaded?(Postgrex) do
     defp intersperse_map([elem | rest], separator, mapper, acc),
       do: intersperse_map(rest, separator, mapper, [acc, mapper.(elem), separator])
 
+    defp intersperse_reduce(list, separator, user_acc, reducer, acc \\ [])
+    defp intersperse_reduce([], _separator, user_acc, _reducer, acc), do: {acc, user_acc}
+
+    defp intersperse_reduce([elem], _separator, user_acc, reducer, acc) do
+      {elem, user_acc} = reducer.(elem, user_acc)
+      {[acc | elem], user_acc}
+    end
+
+    defp intersperse_reduce([elem | rest], separator, user_acc, reducer, acc) do
+      {elem, user_acc} = reducer.(elem, user_acc)
+      intersperse_reduce(rest, separator, user_acc, reducer, [acc, elem, separator])
+    end
+
     defp escape_string(value) when is_binary(value) do
       :binary.replace(value, "'", "''", [:global])
     end
 
-    defp ecto_to_db({:array, t}), do: [ecto_to_db(t), ?[, ?]]
+    defp ecto_to_db({:array, _}), do: error!(nil, "Array type is not supported by Redshift")
     defp ecto_to_db(:id), do: "integer"
     defp ecto_to_db(:serial), do: "serial"
     defp ecto_to_db(:bigserial), do: "bigserial"

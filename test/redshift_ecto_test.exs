@@ -15,7 +15,6 @@ defmodule RedshiftEctoTest do
       field(:x, :integer)
       field(:y, :integer)
       field(:z, :integer)
-      field(:w, {:array, :integer})
 
       has_many(
         :comments,
@@ -50,8 +49,6 @@ defmodule RedshiftEctoTest do
     use Ecto.Schema
 
     schema "schema3" do
-      field(:list1, {:array, :string})
-      field(:list2, {:array, :integer})
       field(:binary, :binary)
     end
   end
@@ -95,7 +92,7 @@ defmodule RedshiftEctoTest do
     assert all(query) == ~s{SELECT t0."x" FROM "0posts" AS t0}
 
     assert_raise Ecto.QueryError,
-                 ~r"PostgreSQL does not support selecting all fields from \"posts\" without a schema",
+                 ~r"Redshift does not support selecting all fields from \"posts\" without a schema",
                  fn ->
                    all from(p in "posts", select: p) |> normalize()
                  end
@@ -313,9 +310,6 @@ defmodule RedshiftEctoTest do
 
     query = Schema |> select([], type(^1, Custom.Permalink)) |> normalize
     assert all(query) == ~s{SELECT $1::bigint FROM "schema" AS s0}
-
-    query = Schema |> select([], type(^[1, 2, 3], {:array, Custom.Permalink})) |> normalize
-    assert all(query) == ~s{SELECT $1::bigint[] FROM "schema" AS s0}
   end
 
   test "nested expressions" do
@@ -332,10 +326,10 @@ defmodule RedshiftEctoTest do
     assert all(query) == ~s{SELECT 1 IN (1,s0."x",3) FROM "schema" AS s0}
 
     query = Schema |> select([e], 1 in ^[]) |> normalize
-    assert all(query) == ~s{SELECT 1 = ANY($1) FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT false FROM "schema" AS s0}
 
     query = Schema |> select([e], 1 in ^[1, 2, 3]) |> normalize
-    assert all(query) == ~s{SELECT 1 = ANY($1) FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT 1 IN ($1,$2,$3) FROM "schema" AS s0}
 
     query = Schema |> select([e], 1 in [1, ^2, 3]) |> normalize
     assert all(query) == ~s{SELECT 1 IN (1,$1,3) FROM "schema" AS s0}
@@ -344,18 +338,15 @@ defmodule RedshiftEctoTest do
     assert all(query) == ~s{SELECT $1 IN (1,$2,3) FROM "schema" AS s0}
 
     query = Schema |> select([e], ^1 in ^[1, 2, 3]) |> normalize
-    assert all(query) == ~s{SELECT $1 = ANY($2) FROM "schema" AS s0}
-
-    query = Schema |> select([e], 1 in e.w) |> normalize
-    assert all(query) == ~s{SELECT 1 = ANY(s0."w") FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT $1 IN ($2,$3,$4) FROM "schema" AS s0}
 
     query = Schema |> select([e], 1 in fragment("foo")) |> normalize
-    assert all(query) == ~s{SELECT 1 = ANY(foo) FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT 1 IN (foo) FROM "schema" AS s0}
 
     query = Schema |> select([e], e.x == ^0 or e.x in ^[1, 2, 3] or e.x == ^4) |> normalize
 
     assert all(query) ==
-             ~s{SELECT ((s0."x" = $1) OR s0."x" = ANY($2)) OR (s0."x" = $3) FROM "schema" AS s0}
+             ~s{SELECT ((s0."x" = $1) OR s0."x" IN ($2,$3,$4)) OR (s0."x" = $5) FROM "schema" AS s0}
   end
 
   test "having" do
@@ -402,12 +393,11 @@ defmodule RedshiftEctoTest do
     assert all(query) == ~s{SELECT s0."x" FROM "schema" AS s0}
   end
 
-  test "arrays and sigils" do
-    query = Schema |> select([], fragment("?", [1, 2, 3])) |> normalize
-    assert all(query) == ~s{SELECT ARRAY[1,2,3] FROM "schema" AS s0}
-
-    query = Schema |> select([], fragment("?", ~w(abc def))) |> normalize
-    assert all(query) == ~s{SELECT ARRAY['abc','def'] FROM "schema" AS s0}
+  test "arrays not supported" do
+    assert_raise Ecto.QueryError, ~r"Array type is not supported by Redshift", fn ->
+      query = Schema |> select([], fragment("?", [1, 2, 3])) |> normalize
+      all(query)
+    end
   end
 
   test "interpolated values" do
@@ -513,18 +503,11 @@ defmodule RedshiftEctoTest do
   end
 
   test "update all with returning" do
-    query = from(m in Schema, update: [set: [x: 0]]) |> select([m], m) |> normalize(:update_all)
+    query = from(m in Schema, update: [set: [x: 0]]) |> select([m], m)
 
-    assert update_all(query) ==
-             ~s{UPDATE "schema" AS s0 SET "x" = 0 RETURNING s0."id", s0."x", s0."y", s0."z", s0."w"}
-  end
-
-  test "update all array ops" do
-    query = from(m in Schema, update: [push: [w: 0]]) |> normalize(:update_all)
-    assert update_all(query) == ~s{UPDATE "schema" AS s0 SET "w" = array_append(s0."w", 0)}
-
-    query = from(m in Schema, update: [pull: [w: 0]]) |> normalize(:update_all)
-    assert update_all(query) == ~s{UPDATE "schema" AS s0 SET "w" = array_remove(s0."w", 0)}
+    assert_raise ArgumentError, ~r"RETURNING is not supported by Redshift", fn ->
+      update_all(query)
+    end
   end
 
   test "update all with prefix" do
@@ -562,7 +545,9 @@ defmodule RedshiftEctoTest do
   test "delete all with returning" do
     query = Schema |> Queryable.to_query() |> select([m], m)
 
-    assert_raise Ecto.QueryError, fn -> delete_all(query) end
+    assert_raise ArgumentError, ~r"RETURNING is not supported by Redshift", fn ->
+      delete_all(query)
+    end
   end
 
   test "delete all with prefix" do
@@ -774,14 +759,14 @@ defmodule RedshiftEctoTest do
   # Schema based
 
   test "insert" do
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:raise, [], []}, [:id])
-    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) RETURNING "id"}
+    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:raise, [], []}, [])
+    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2)}
 
-    query = insert(nil, "schema", [:x, :y], [[:x, :y], [nil, :z]], {:raise, [], []}, [:id])
-    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2),(DEFAULT,$3) RETURNING "id"}
+    query = insert(nil, "schema", [:x, :y], [[:x, :y], [nil, :z]], {:raise, [], []}, [])
+    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2),(DEFAULT,$3)}
 
-    query = insert(nil, "schema", [], [[]], {:raise, [], []}, [:id])
-    assert query == ~s{INSERT INTO "schema" VALUES (DEFAULT) RETURNING "id"}
+    query = insert(nil, "schema", [], [[]], {:raise, [], []}, [])
+    assert query == ~s{INSERT INTO "schema" VALUES (DEFAULT)}
 
     query = insert(nil, "schema", [], [[]], {:raise, [], []}, [])
     assert query == ~s{INSERT INTO "schema" VALUES (DEFAULT)}
@@ -802,18 +787,18 @@ defmodule RedshiftEctoTest do
 
     # For :update
     update = from("schema", update: [set: [z: "foo"]]) |> normalize(:update_all)
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [:z])
+    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [])
 
     assert query ==
-             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = 'foo' RETURNING "z"}
+             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = 'foo'}
 
     update =
       from("schema", update: [set: [z: ^"foo"]], where: [w: true]) |> normalize(:update_all, 2)
 
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [:z])
+    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [])
 
     assert query ==
-             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = $3 WHERE (s0."w" = TRUE) RETURNING "z"}
+             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = $3 WHERE (s0."w" = TRUE)}
 
     # For :replace_all
     query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:replace_all, [], [:id]}, [])
@@ -837,8 +822,8 @@ defmodule RedshiftEctoTest do
     query = update(nil, "schema", [:x, :y], [:id], [])
     assert query == ~s{UPDATE "schema" SET "x" = $1, "y" = $2 WHERE "id" = $3}
 
-    query = update(nil, "schema", [:x, :y], [:id], [:z])
-    assert query == ~s{UPDATE "schema" SET "x" = $1, "y" = $2 WHERE "id" = $3 RETURNING "z"}
+    query = update(nil, "schema", [:x, :y], [:id], [])
+    assert query == ~s{UPDATE "schema" SET "x" = $1, "y" = $2 WHERE "id" = $3}
 
     query = update("prefix", "schema", [:x, :y], [:id], [])
     assert query == ~s{UPDATE "prefix"."schema" SET "x" = $1, "y" = $2 WHERE "id" = $3}
@@ -848,8 +833,8 @@ defmodule RedshiftEctoTest do
     query = delete(nil, "schema", [:x, :y], [])
     assert query == ~s{DELETE FROM "schema" WHERE "x" = $1 AND "y" = $2}
 
-    query = delete(nil, "schema", [:x, :y], [:z])
-    assert query == ~s{DELETE FROM "schema" WHERE "x" = $1 AND "y" = $2 RETURNING "z"}
+    query = delete(nil, "schema", [:x, :y], [])
+    assert query == ~s{DELETE FROM "schema" WHERE "x" = $1 AND "y" = $2}
 
     query = delete("prefix", "schema", [:x, :y], [])
     assert query == ~s{DELETE FROM "prefix"."schema" WHERE "x" = $1 AND "y" = $2}
@@ -874,8 +859,7 @@ defmodule RedshiftEctoTest do
          {:add, :price, :numeric, [precision: 8, scale: 2, default: {:fragment, "expr"}]},
          {:add, :on_hand, :integer, [default: 0, null: true]},
          {:add, :published_at, :"time without time zone", [null: true]},
-         {:add, :is_active, :boolean, [default: true]},
-         {:add, :tags, {:array, :string}, [default: []]}
+         {:add, :is_active, :boolean, [default: true]}
        ]}
 
     assert execute_ddl(create) == [
@@ -884,8 +868,7 @@ defmodule RedshiftEctoTest do
              "price" numeric(8,2) DEFAULT expr,
              "on_hand" integer DEFAULT 0 NULL,
              "published_at" time without time zone NULL,
-             "is_active" boolean DEFAULT true,
-             "tags" varchar(255)[] DEFAULT ARRAY[]::varchar[])
+             "is_active" boolean DEFAULT true)
              """
              |> remove_newlines
            ]
