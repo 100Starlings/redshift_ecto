@@ -776,46 +776,25 @@ defmodule RedshiftEctoTest do
   end
 
   test "insert with on conflict" do
+    # For :raise
+    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:raise, [], []}, [])
+    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2)}
+
     # For :nothing
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:nothing, [], []}, [])
-    assert query == ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) ON CONFLICT DO NOTHING}
-
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:nothing, [], [:x, :y]}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO NOTHING}
+    assert_raise ArgumentError, "ON CONFLICT is not supported by Redshift", fn ->
+      insert(nil, "schema", [:x, :y], [[:x, :y]], {:nothing, [], []}, [])
+    end
 
     # For :update
-    update = from("schema", update: [set: [z: "foo"]]) |> normalize(:update_all)
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = 'foo'}
-
-    update =
-      from("schema", update: [set: [z: ^"foo"]], where: [w: true]) |> normalize(:update_all, 2)
-
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" AS s0 ("x","y") VALUES ($1,$2) ON CONFLICT ("x","y") DO UPDATE SET "z" = $3 WHERE (s0."w" = TRUE)}
+    assert_raise ArgumentError, "ON CONFLICT is not supported by Redshift", fn ->
+      update = from("schema", update: [set: [z: "foo"]]) |> normalize(:update_all)
+      insert(nil, "schema", [:x, :y], [[:x, :y]], {update, [], [:x, :y]}, [])
+    end
 
     # For :replace_all
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:replace_all, [], [:id]}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "x" = EXCLUDED."x","y" = EXCLUDED."y"}
-
-    query = insert(nil, "schema", [:x, :y], [[:x, :y]], {:replace_all, [], []}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) ON CONFLICT DO UPDATE SET "x" = EXCLUDED."x","y" = EXCLUDED."y"}
-
-    query =
-      insert(nil, "schema", [:x, :y], [[:x, :y]], {:replace_all, [], {:constraint, :foo}}, [])
-
-    assert query ==
-             ~s{INSERT INTO "schema" ("x","y") VALUES ($1,$2) ON CONFLICT ON CONSTRAINT \"foo\" DO UPDATE SET "x" = EXCLUDED."x","y" = EXCLUDED."y"}
+    assert_raise ArgumentError, "ON CONFLICT is not supported by Redshift", fn ->
+      insert(nil, "schema", [:x, :y], [[:x, :y]], {:replace_all, [], [:id]}, [])
+    end
   end
 
   test "update" do

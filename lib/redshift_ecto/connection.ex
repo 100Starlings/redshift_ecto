@@ -46,21 +46,18 @@ if Code.ensure_loaded?(Postgrex) do
       [select, from, join, where, group_by, having, order_by, limit, offset | lock]
     end
 
-    def update_all(query, prefix \\ nil)
-
-    def update_all(%{from: from, select: nil} = query, prefix) do
+    def update_all(%{from: from, select: nil} = query) do
       sources = create_names(query)
       {from, name} = get_source(query, sources, 0, from)
 
-      prefix = prefix || ["UPDATE ", from, " AS ", name | " SET "]
       fields = update_fields(query, sources)
       {join, wheres} = using_join(query, :update_all, "FROM", sources)
       where = where(%{query | wheres: wheres ++ query.wheres}, sources)
 
-      [prefix, fields, join, where]
+      ["UPDATE ", from, " AS ", name, " SET ", fields, join, where]
     end
 
-    def update_all(_query, _prefix) do
+    def update_all(_query) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
@@ -75,13 +72,7 @@ if Code.ensure_loaded?(Postgrex) do
           {[quote_name(field), " = $" | Integer.to_string(acc)], acc + 1}
         end)
 
-      [
-        "UPDATE ",
-        quote_table(prefix, table),
-        " SET ",
-        fields,
-        " WHERE " | filters
-      ]
+      ["UPDATE ", quote_table(prefix, table), " SET ", fields, " WHERE " | filters]
     end
 
     def update(_prefix, _table, _fields, _filters, _returning) do
@@ -115,7 +106,7 @@ if Code.ensure_loaded?(Postgrex) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
-    def insert(prefix, table, header, rows, on_conflict, []) do
+    def insert(prefix, table, header, rows, {:raise, _, []}, []) do
       values =
         if header == [] do
           [" VALUES " | intersperse_map(rows, ?,, fn _ -> "(DEFAULT)" end)]
@@ -123,52 +114,15 @@ if Code.ensure_loaded?(Postgrex) do
           [?\s, ?(, intersperse_map(header, ?,, &quote_name/1), ") VALUES " | insert_all(rows, 1)]
         end
 
-      [
-        "INSERT INTO ",
-        quote_table(prefix, table),
-        insert_as(on_conflict),
-        values | on_conflict(on_conflict, header)
-      ]
+      ["INSERT INTO ", quote_table(prefix, table) | values]
+    end
+
+    def insert(_prefix, _table, _header, _rows, _on_conflict, []) do
+      error!(nil, "ON CONFLICT is not supported by Redshift")
     end
 
     def insert(_prefix, _table, _header, _rows, _on_conflict, _returning) do
       error!(nil, "RETURNING is not supported by Redshift")
-    end
-
-    defp insert_as({%{from: from} = query, _, _}) do
-      {_, name} = get_source(%{query | joins: []}, create_names(query), 0, from)
-      [" AS " | name]
-    end
-
-    defp insert_as({_, _, _}) do
-      []
-    end
-
-    defp on_conflict({:raise, _, []}, _header), do: []
-
-    defp on_conflict({:nothing, _, targets}, _header),
-      do: [" ON CONFLICT ", conflict_target(targets) | "DO NOTHING"]
-
-    defp on_conflict({:replace_all, _, targets}, header),
-      do: [" ON CONFLICT ", conflict_target(targets), "DO " | replace_all(header)]
-
-    defp on_conflict({query, _, targets}, _header),
-      do: [" ON CONFLICT ", conflict_target(targets), "DO " | update_all(query, "UPDATE SET ")]
-
-    defp conflict_target({:constraint, constraint}),
-      do: ["ON CONSTRAINT ", quote_name(constraint), ?\s]
-
-    defp conflict_target([]), do: []
-    defp conflict_target(targets), do: [?(, intersperse_map(targets, ?,, &quote_name/1), ?), ?\s]
-
-    defp replace_all(header) do
-      [
-        "UPDATE SET "
-        | intersperse_map(header, ?,, fn field ->
-            quoted = quote_name(field)
-            [quoted, " = ", "EXCLUDED." | quoted]
-          end)
-      ]
     end
 
     defp insert_all(rows, counter) do
