@@ -926,19 +926,7 @@ defmodule RedshiftEctoTest do
          {:add, :id, :serial, [primary_key: true]},
          {:add, :category_0, %Reference{table: :categories}, []},
          {:add, :category_1, %Reference{table: :categories, name: :foo_bar}, []},
-         {:add, :category_2, %Reference{table: :categories, on_delete: :nothing}, []},
-         {:add, :category_3, %Reference{table: :categories, on_delete: :delete_all},
-          [null: false]},
-         {:add, :category_4, %Reference{table: :categories, on_delete: :nilify_all}, []},
-         {:add, :category_5, %Reference{table: :categories, on_update: :nothing}, []},
-         {:add, :category_6, %Reference{table: :categories, on_update: :update_all},
-          [null: false]},
-         {:add, :category_7, %Reference{table: :categories, on_update: :nilify_all}, []},
-         {:add, :category_8,
-          %Reference{table: :categories, on_delete: :nilify_all, on_update: :update_all},
-          [null: false]},
-         {:add, :category_9, %Reference{table: :categories, on_delete: :restrict}, []},
-         {:add, :category_10, %Reference{table: :categories, on_update: :restrict}, []}
+         {:add, :category_2, %Reference{table: :categories}, [null: false]}
        ]}
 
     assert execute_ddl(create) == [
@@ -946,15 +934,7 @@ defmodule RedshiftEctoTest do
              CREATE TABLE "posts" ("id" integer,
              "category_0" bigint CONSTRAINT "posts_category_0_fkey" REFERENCES "categories"("id"),
              "category_1" bigint CONSTRAINT "foo_bar" REFERENCES "categories"("id"),
-             "category_2" bigint CONSTRAINT "posts_category_2_fkey" REFERENCES "categories"("id"),
-             "category_3" bigint NOT NULL CONSTRAINT "posts_category_3_fkey" REFERENCES "categories"("id") ON DELETE CASCADE,
-             "category_4" bigint CONSTRAINT "posts_category_4_fkey" REFERENCES "categories"("id") ON DELETE SET NULL,
-             "category_5" bigint CONSTRAINT "posts_category_5_fkey" REFERENCES "categories"("id"),
-             "category_6" bigint NOT NULL CONSTRAINT "posts_category_6_fkey" REFERENCES "categories"("id") ON UPDATE CASCADE,
-             "category_7" bigint CONSTRAINT "posts_category_7_fkey" REFERENCES "categories"("id") ON UPDATE SET NULL,
-             "category_8" bigint NOT NULL CONSTRAINT "posts_category_8_fkey" REFERENCES "categories"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-             "category_9" bigint CONSTRAINT "posts_category_9_fkey" REFERENCES "categories"("id") ON DELETE RESTRICT,
-             "category_10" bigint CONSTRAINT "posts_category_10_fkey" REFERENCES "categories"("id") ON UPDATE RESTRICT,
+             "category_2" bigint NOT NULL CONSTRAINT "posts_category_2_fkey" REFERENCES "categories"("id"),
              PRIMARY KEY ("id"))
              """
              |> remove_newlines
@@ -1036,31 +1016,36 @@ defmodule RedshiftEctoTest do
   test "alter table" do
     alter =
       {:alter, table(:posts),
-       [
-         {:add, :title, :string, [default: "Untitled", size: 100, null: false]},
-         {:add, :author_id, %Reference{table: :author}, []},
-         {:modify, :price, :numeric, [precision: 8, scale: 2, null: true]},
-         {:modify, :cost, :integer, [null: false, default: nil]},
-         {:modify, :permalink_id, %Reference{table: :permalinks}, null: false},
-         {:remove, :summary}
-       ]}
+       [{:add, :title, :string, [default: "Untitled", size: 100, null: false]}]}
 
     assert execute_ddl(alter) == [
-             """
-             ALTER TABLE "posts"
-             ADD COLUMN "title" varchar(100) DEFAULT 'Untitled' NOT NULL,
-             ADD COLUMN "author_id" bigint CONSTRAINT "posts_author_id_fkey" REFERENCES "author"("id"),
-             ALTER COLUMN "price" TYPE numeric(8,2),
-             ALTER COLUMN "price" DROP NOT NULL,
-             ALTER COLUMN "cost" TYPE integer,
-             ALTER COLUMN "cost" SET NOT NULL,
-             ALTER COLUMN "cost" SET DEFAULT NULL,
-             ALTER COLUMN "permalink_id" TYPE bigint,
-             ADD CONSTRAINT "posts_permalink_id_fkey" FOREIGN KEY ("permalink_id") REFERENCES "permalinks"("id"),
-             ALTER COLUMN "permalink_id" SET NOT NULL,
-             DROP COLUMN "summary"
-             """
-             |> remove_newlines
+             ~s|ALTER TABLE "posts" ADD COLUMN "title" varchar(100) DEFAULT 'Untitled' NOT NULL|
+           ]
+
+    alter = {:alter, table(:posts), [{:add, :author_id, %Reference{table: :author}, []}]}
+
+    assert execute_ddl(alter) == [
+             ~s|ALTER TABLE "posts" ADD COLUMN "author_id" bigint CONSTRAINT "posts_author_id_fkey" REFERENCES "author"("id")|
+           ]
+
+    alter =
+      {:alter, table(:posts), [{:modify, :price, :numeric, [precision: 8, scale: 2, null: true]}]}
+
+    assert_raise ArgumentError, "ALTER COLUMN is not supported by Redshift", fn ->
+      execute_ddl(alter)
+    end
+
+    alter =
+      {:alter, table(:posts), [{:modify, :permalink_id, %Reference{table: :permalinks}, []}]}
+
+    assert execute_ddl(alter) == [
+             ~s|ALTER TABLE "posts" ADD CONSTRAINT "posts_permalink_id_fkey" FOREIGN KEY ("permalink_id") REFERENCES "permalinks"("id")|
+           ]
+
+    alter = {:alter, table(:posts), [{:remove, :summary}]}
+
+    assert execute_ddl(alter) == [
+             ~s|ALTER TABLE "posts" DROP COLUMN "summary"|
            ]
   end
 
@@ -1069,47 +1054,21 @@ defmodule RedshiftEctoTest do
       {:alter, table(:posts, comment: "table comment"),
        [
          {:add, :title, :string,
-          [default: "Untitled", size: 100, null: false, comment: "column comment"]},
-         {:modify, :price, :numeric, [precision: 8, scale: 2, null: true]},
-         {:modify, :permalink_id, %Reference{table: :permalinks},
-          [null: false, comment: "column comment"]},
-         {:remove, :summary}
+          [default: "Untitled", size: 100, null: false, comment: "column comment"]}
        ]}
 
     assert execute_ddl(alter) == [
-             remove_newlines("""
-             ALTER TABLE "posts"
-             ADD COLUMN "title" varchar(100) DEFAULT 'Untitled' NOT NULL,
-             ALTER COLUMN "price" TYPE numeric(8,2),
-             ALTER COLUMN "price" DROP NOT NULL,
-             ALTER COLUMN "permalink_id" TYPE bigint,
-             ADD CONSTRAINT "posts_permalink_id_fkey" FOREIGN KEY ("permalink_id") REFERENCES "permalinks"("id"),
-             ALTER COLUMN "permalink_id" SET NOT NULL,
-             DROP COLUMN "summary"
-             """),
+             ~s|ALTER TABLE "posts" ADD COLUMN "title" varchar(100) DEFAULT 'Untitled' NOT NULL|,
              ~s|COMMENT ON TABLE \"posts\" IS 'table comment'|,
-             ~s|COMMENT ON COLUMN \"posts\".\"title\" IS 'column comment'|,
-             ~s|COMMENT ON COLUMN \"posts\".\"permalink_id\" IS 'column comment'|
+             ~s|COMMENT ON COLUMN \"posts\".\"title\" IS 'column comment'|
            ]
   end
 
   test "alter table with prefix" do
-    alter =
-      {:alter, table(:posts, prefix: :foo),
-       [
-         {:add, :author_id, %Reference{table: :author}, []},
-         {:modify, :permalink_id, %Reference{table: :permalinks}, null: false}
-       ]}
+    alter = {:alter, table(:posts, prefix: :foo), [{:add, :author, :string, []}]}
 
     assert execute_ddl(alter) == [
-             """
-             ALTER TABLE "foo"."posts"
-             ADD COLUMN "author_id" bigint CONSTRAINT "posts_author_id_fkey" REFERENCES "foo"."author"("id"),
-             ALTER COLUMN \"permalink_id\" TYPE bigint,
-             ADD CONSTRAINT "posts_permalink_id_fkey" FOREIGN KEY ("permalink_id") REFERENCES "foo"."permalinks"("id"),
-             ALTER COLUMN "permalink_id" SET NOT NULL
-             """
-             |> remove_newlines
+             ~s|ALTER TABLE "foo"."posts" ADD COLUMN "author" varchar(255)|
            ]
   end
 
@@ -1142,164 +1101,52 @@ defmodule RedshiftEctoTest do
   test "create index" do
     create = {:create, index(:posts, [:category_id, :permalink])}
 
-    assert execute_ddl(create) ==
-             [
-               ~s|CREATE INDEX "posts_category_id_permalink_index" ON "posts" ("category_id", "permalink")|
-             ]
-
-    create = {:create, index(:posts, ["lower(permalink)"], name: "posts$main")}
-    assert execute_ddl(create) == [~s|CREATE INDEX "posts$main" ON "posts" (lower(permalink))|]
-  end
-
-  test "create index with prefix" do
-    create = {:create, index(:posts, [:category_id, :permalink], prefix: :foo)}
-
-    assert execute_ddl(create) ==
-             [
-               ~s|CREATE INDEX "posts_category_id_permalink_index" ON "foo"."posts" ("category_id", "permalink")|
-             ]
-
-    create = {:create, index(:posts, ["lower(permalink)"], name: "posts$main", prefix: :foo)}
-
-    assert execute_ddl(create) ==
-             [~s|CREATE INDEX "posts$main" ON "foo"."posts" (lower(permalink))|]
-  end
-
-  test "create index with comment" do
-    create =
-      {:create, index(:posts, [:category_id, :permalink], prefix: :foo, comment: "comment")}
-
-    assert execute_ddl(create) == [
-             remove_newlines("""
-             CREATE INDEX "posts_category_id_permalink_index" ON "foo"."posts" ("category_id", "permalink")
-             """),
-             ~s|COMMENT ON INDEX "posts_category_id_permalink_index" IS 'comment'|
-           ]
+    assert_raise ArgumentError, "CREATE INDEX and DROP INDEX are not supported by Redshift", fn ->
+      execute_ddl(create)
+    end
   end
 
   test "create unique index" do
     create = {:create, index(:posts, [:permalink], unique: true)}
 
-    assert execute_ddl(create) ==
-             [~s|CREATE UNIQUE INDEX "posts_permalink_index" ON "posts" ("permalink")|]
-  end
-
-  test "create unique index with condition" do
-    create = {:create, index(:posts, [:permalink], unique: true, where: "public IS TRUE")}
-
-    assert execute_ddl(create) ==
-             [
-               ~s|CREATE UNIQUE INDEX "posts_permalink_index" ON "posts" ("permalink") WHERE public IS TRUE|
-             ]
-
-    create = {:create, index(:posts, [:permalink], unique: true, where: :public)}
-
-    assert execute_ddl(create) ==
-             [
-               ~s|CREATE UNIQUE INDEX "posts_permalink_index" ON "posts" ("permalink") WHERE public|
-             ]
-  end
-
-  test "create index concurrently" do
-    create = {:create, index(:posts, [:permalink], concurrently: true)}
-
-    assert execute_ddl(create) ==
-             [~s|CREATE INDEX CONCURRENTLY "posts_permalink_index" ON "posts" ("permalink")|]
-  end
-
-  test "create unique index concurrently" do
-    create = {:create, index(:posts, [:permalink], concurrently: true, unique: true)}
-
-    assert execute_ddl(create) ==
-             [
-               ~s|CREATE UNIQUE INDEX CONCURRENTLY "posts_permalink_index" ON "posts" ("permalink")|
-             ]
-  end
-
-  test "create an index using a different type" do
-    create = {:create, index(:posts, [:permalink], using: :hash)}
-
-    assert execute_ddl(create) ==
-             [~s|CREATE INDEX "posts_permalink_index" ON "posts" USING hash ("permalink")|]
+    assert_raise ArgumentError, "CREATE INDEX and DROP INDEX are not supported by Redshift", fn ->
+      execute_ddl(create)
+    end
   end
 
   test "drop index" do
     drop = {:drop, index(:posts, [:id], name: "posts$main")}
-    assert execute_ddl(drop) == [~s|DROP INDEX "posts$main"|]
-  end
 
-  test "drop index with prefix" do
-    drop = {:drop, index(:posts, [:id], name: "posts$main", prefix: :foo)}
-    assert execute_ddl(drop) == [~s|DROP INDEX "foo"."posts$main"|]
-  end
-
-  test "drop index concurrently" do
-    drop = {:drop, index(:posts, [:id], name: "posts$main", concurrently: true)}
-    assert execute_ddl(drop) == [~s|DROP INDEX CONCURRENTLY "posts$main"|]
+    assert_raise ArgumentError, "CREATE INDEX and DROP INDEX are not supported by Redshift", fn ->
+      execute_ddl(drop)
+    end
   end
 
   test "create check constraint" do
     create = {:create, constraint(:products, "price_must_be_positive", check: "price > 0")}
 
-    assert execute_ddl(create) ==
-             [
-               ~s|ALTER TABLE "products" ADD CONSTRAINT "price_must_be_positive" CHECK (price > 0)|
-             ]
-
-    create =
-      {:create,
-       constraint(:products, "price_must_be_positive", check: "price > 0", prefix: "foo")}
-
-    assert execute_ddl(create) ==
-             [
-               ~s|ALTER TABLE "foo"."products" ADD CONSTRAINT "price_must_be_positive" CHECK (price > 0)|
-             ]
+    assert_raise ArgumentError, "CHECK constraints are not supported by Redshift", fn ->
+      execute_ddl(create)
+    end
   end
 
   test "create exclusion constraint" do
-    create =
-      {:create,
-       constraint(
-         :products,
-         "price_must_be_positive",
-         exclude: ~s|gist (int4range("from", "to", '[]') WITH &&)|
-       )}
+    create = {:create, constraint(:products, "price_must_be_positive", exclude: "")}
 
-    assert execute_ddl(create) ==
-             [
-               ~s|ALTER TABLE "products" ADD CONSTRAINT "price_must_be_positive" EXCLUDE USING gist (int4range("from", "to", '[]') WITH &&)|
-             ]
-  end
-
-  test "create constraint with comment" do
-    create =
-      {:create,
-       constraint(
-         :products,
-         "price_must_be_positive",
-         check: "price > 0",
-         prefix: "foo",
-         comment: "comment"
-       )}
-
-    assert execute_ddl(create) == [
-             remove_newlines("""
-             ALTER TABLE "foo"."products" ADD CONSTRAINT "price_must_be_positive" CHECK (price > 0)
-             """),
-             ~s|COMMENT ON CONSTRAINT "price_must_be_positive" ON "foo"."products" IS 'comment'|
-           ]
+    assert_raise ArgumentError, "EXCLUDE constraints are not supported by Redshift", fn ->
+      execute_ddl(create)
+    end
   end
 
   test "drop constraint" do
-    drop = {:drop, constraint(:products, "price_must_be_positive")}
+    drop = {:drop, constraint(:posts, "posts_author_id_fkey")}
+
+    assert execute_ddl(drop) == [~s|ALTER TABLE "posts" DROP CONSTRAINT "posts_author_id_fkey"|]
+
+    drop = {:drop, constraint(:posts, "posts_author_id_fkey", prefix: "foo")}
 
     assert execute_ddl(drop) ==
-             [~s|ALTER TABLE "products" DROP CONSTRAINT "price_must_be_positive"|]
-
-    drop = {:drop, constraint(:products, "price_must_be_positive", prefix: "foo")}
-
-    assert execute_ddl(drop) ==
-             [~s|ALTER TABLE "foo"."products" DROP CONSTRAINT "price_must_be_positive"|]
+             [~s|ALTER TABLE "foo"."posts" DROP CONSTRAINT "posts_author_id_fkey"|]
   end
 
   test "rename table" do

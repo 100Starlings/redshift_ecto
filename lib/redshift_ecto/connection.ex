@@ -564,7 +564,309 @@ if Code.ensure_loaded?(Postgrex) do
 
     ## DDL
 
-    defdelegate execute_ddl(command), to: Postgres
+    alias Ecto.Migration.{Table, Index, Reference, Constraint}
+
+    @drops [:drop, :drop_if_exists]
+
+    def execute_ddl({command, %Table{} = table, columns})
+        when command in [:create, :create_if_not_exists] do
+      table_name = quote_table(table.prefix, table.name)
+
+      query = [
+        "CREATE TABLE ",
+        if_do(command == :create_if_not_exists, "IF NOT EXISTS "),
+        table_name,
+        ?\s,
+        ?(,
+        column_definitions(table, columns),
+        pk_definition(columns, ", "),
+        ?),
+        options_expr(table.options)
+      ]
+
+      [query] ++
+        comments_on("TABLE", table_name, table.comment) ++
+        comments_for_columns(table_name, columns)
+    end
+
+    def execute_ddl({command, %Table{} = table}) when command in @drops do
+      [
+        [
+          "DROP TABLE ",
+          if_do(command == :drop_if_exists, "IF EXISTS "),
+          quote_table(table.prefix, table.name)
+        ]
+      ]
+    end
+
+    # TODO: split multiple changes into multiple queries as Redshift doesn't
+    # support more than one change in a single ALTER TABLE
+    def execute_ddl({:alter, %Table{} = table, changes}) do
+      table_name = quote_table(table.prefix, table.name)
+
+      query = [
+        "ALTER TABLE ",
+        table_name,
+        ?\s,
+        column_changes(table, changes),
+        pk_definition(changes, ", ADD ")
+      ]
+
+      [query] ++
+        comments_on("TABLE", table_name, table.comment) ++
+        comments_for_columns(table_name, changes)
+    end
+
+    def execute_ddl({_command, %Index{} = _index}) do
+      error!(nil, "CREATE INDEX and DROP INDEX are not supported by Redshift")
+    end
+
+    def execute_ddl({:rename, %Table{} = current_table, %Table{} = new_table}) do
+      [
+        [
+          "ALTER TABLE ",
+          quote_table(current_table.prefix, current_table.name),
+          " RENAME TO ",
+          quote_table(nil, new_table.name)
+        ]
+      ]
+    end
+
+    def execute_ddl({:rename, %Table{} = table, current_column, new_column}) do
+      [
+        [
+          "ALTER TABLE ",
+          quote_table(table.prefix, table.name),
+          " RENAME ",
+          quote_name(current_column),
+          " TO ",
+          quote_name(new_column)
+        ]
+      ]
+    end
+
+    def execute_ddl({:create, %Constraint{} = constraint}) do
+      table_name = quote_table(constraint.prefix, constraint.table)
+      queries = [["ALTER TABLE ", table_name, " ADD ", new_constraint_expr(constraint)]]
+
+      queries ++ comments_on("CONSTRAINT", constraint.name, constraint.comment, table_name)
+    end
+
+    def execute_ddl({:drop, %Constraint{} = constraint}) do
+      [
+        [
+          "ALTER TABLE ",
+          quote_table(constraint.prefix, constraint.table),
+          " DROP CONSTRAINT ",
+          quote_name(constraint.name)
+        ]
+      ]
+    end
+
+    def execute_ddl(string) when is_binary(string), do: [string]
+
+    def execute_ddl(keyword) when is_list(keyword),
+      do: error!(nil, "PostgreSQL adapter does not support keyword lists in execute")
+
+    defp pk_definition(columns, prefix) do
+      pks = for {_, name, _, opts} <- columns, opts[:primary_key], do: name
+
+      case pks do
+        [] -> []
+        _ -> [prefix, "PRIMARY KEY (", intersperse_map(pks, ", ", &quote_name/1), ")"]
+      end
+    end
+
+    defp comments_on(_object, _name, nil), do: []
+
+    defp comments_on(object, name, comment) do
+      [["COMMENT ON ", object, ?\s, name, " IS ", single_quote(comment)]]
+    end
+
+    defp comments_on(_object, _name, nil, _table_name), do: []
+
+    defp comments_on(object, name, comment, table_name) do
+      [
+        [
+          "COMMENT ON ",
+          object,
+          ?\s,
+          quote_name(name),
+          " ON ",
+          table_name,
+          " IS ",
+          single_quote(comment)
+        ]
+      ]
+    end
+
+    defp comments_for_columns(table_name, columns) do
+      Enum.flat_map(columns, fn
+        {_operation, column_name, _column_type, opts} ->
+          column_name = [table_name, ?. | quote_name(column_name)]
+          comments_on("COLUMN", column_name, opts[:comment])
+
+        _ ->
+          []
+      end)
+    end
+
+    defp column_definitions(table, columns) do
+      intersperse_map(columns, ", ", &column_definition(table, &1))
+    end
+
+    defp column_definition(table, {:add, name, %Reference{} = ref, opts}) do
+      [
+        quote_name(name),
+        ?\s,
+        reference_column_type(ref.type, opts),
+        column_options(ref.type, opts),
+        reference_expr(ref, table, name)
+      ]
+    end
+
+    defp column_definition(_table, {:add, name, type, opts}) do
+      [quote_name(name), ?\s, column_type(type, opts), column_options(type, opts)]
+    end
+
+    defp column_changes(table, columns) do
+      intersperse_map(columns, ", ", &column_change(table, &1))
+    end
+
+    defp column_change(table, {:add, name, %Reference{} = ref, opts}) do
+      [
+        "ADD COLUMN ",
+        quote_name(name),
+        ?\s,
+        reference_column_type(ref.type, opts),
+        column_options(ref.type, opts),
+        reference_expr(ref, table, name)
+      ]
+    end
+
+    defp column_change(_table, {:add, name, type, opts}) do
+      ["ADD COLUMN ", quote_name(name), ?\s, column_type(type, opts), column_options(type, opts)]
+    end
+
+    defp column_change(table, {:modify, name, %Reference{} = ref, _opts}) do
+      constraint_expr(ref, table, name)
+    end
+
+    defp column_change(_table, {:modify, _name, _type, _opts}) do
+      error!(nil, "ALTER COLUMN is not supported by Redshift")
+    end
+
+    defp column_change(_table, {:remove, name}), do: ["DROP COLUMN ", quote_name(name)]
+
+    defp column_options(type, opts) do
+      default = Keyword.fetch(opts, :default)
+      null = Keyword.get(opts, :null)
+      [default_expr(default, type), null_expr(null)]
+    end
+
+    defp null_expr(false), do: " NOT NULL"
+    defp null_expr(true), do: " NULL"
+    defp null_expr(_), do: []
+
+    defp new_constraint_expr(%Constraint{check: check}) when is_binary(check) do
+      error!(nil, "CHECK constraints are not supported by Redshift")
+    end
+
+    defp new_constraint_expr(%Constraint{exclude: exclude}) when is_binary(exclude) do
+      error!(nil, "EXCLUDE constraints are not supported by Redshift")
+    end
+
+    defp default_expr({:ok, nil}, _type), do: " DEFAULT NULL"
+
+    defp default_expr({:ok, literal}, _type) when is_binary(literal),
+      do: [" DEFAULT '", escape_string(literal), ?']
+
+    defp default_expr({:ok, literal}, _type) when is_number(literal) or is_boolean(literal),
+      do: [" DEFAULT ", to_string(literal)]
+
+    defp default_expr({:ok, %{} = map}, :map) do
+      default = Ecto.Adapter.json_library().encode!(map)
+      [" DEFAULT ", single_quote(default)]
+    end
+
+    defp default_expr({:ok, {:fragment, expr}}, _type), do: [" DEFAULT ", expr]
+
+    defp default_expr({:ok, expr}, type),
+      do:
+        raise(
+          ArgumentError,
+          "unknown default `#{inspect(expr)}` for type `#{inspect(type)}`. " <>
+            ":default may be a string, number, boolean, map (when type is Map), or a fragment(...)"
+        )
+
+    defp default_expr(:error, _), do: []
+
+    defp options_expr(nil), do: []
+
+    defp options_expr(keyword) when is_list(keyword),
+      do: error!(nil, "PostgreSQL adapter does not support keyword lists in :options")
+
+    defp options_expr(options), do: [?\s, options]
+
+    defp column_type(type, opts) do
+      size = Keyword.get(opts, :size)
+      precision = Keyword.get(opts, :precision)
+      scale = Keyword.get(opts, :scale)
+      type_name = ecto_to_db(type)
+
+      cond do
+        size -> [type_name, ?(, to_string(size), ?)]
+        precision -> [type_name, ?(, to_string(precision), ?,, to_string(scale || 0), ?)]
+        type == :string -> [type_name, "(255)"]
+        true -> type_name
+      end
+    end
+
+    defp reference_expr(%Reference{on_delete: :nothing, on_update: :nothing} = ref, table, name),
+      do: [
+        " CONSTRAINT ",
+        reference_name(ref, table, name),
+        " REFERENCES ",
+        quote_table(table.prefix, ref.table),
+        ?(,
+        quote_name(ref.column),
+        ?)
+      ]
+
+    defp reference_expr(%Reference{on_delete: :nothing}, _table, _name),
+      do: error!(nil, "ON UPDATE is not supported by Redshift")
+
+    defp reference_expr(%Reference{}, _table, _name),
+      do: error!(nil, "ON DELETE is not supported by Redshift")
+
+    defp constraint_expr(%Reference{on_delete: :nothing, on_update: :nothing} = ref, table, name),
+      do: [
+        "ADD CONSTRAINT ",
+        reference_name(ref, table, name),
+        ?\s,
+        "FOREIGN KEY (",
+        quote_name(name),
+        ") REFERENCES ",
+        quote_table(table.prefix, ref.table),
+        ?(,
+        quote_name(ref.column),
+        ?)
+      ]
+
+    defp constraint_expr(%Reference{on_delete: :nothing}, _table, _name),
+      do: error!(nil, "ON UPDATE is not supported by Redshift")
+
+    defp constraint_expr(%Reference{}, _table, _name),
+      do: error!(nil, "ON DELETE is not supported by Redshift")
+
+    defp reference_name(%Reference{name: nil}, table, column),
+      do: quote_name("#{table.name}_#{column}_fkey")
+
+    defp reference_name(%Reference{name: name}, _table, _column), do: quote_name(name)
+
+    defp reference_column_type(:serial, _opts), do: "integer"
+    defp reference_column_type(:bigserial, _opts), do: "bigint"
+    defp reference_column_type(type, opts), do: column_type(type, opts)
 
     ## Helpers
 
@@ -603,6 +905,8 @@ if Code.ensure_loaded?(Postgrex) do
       [?", name, ?"]
     end
 
+    defp single_quote(value), do: [?', escape_string(value), ?']
+
     defp intersperse_map(list, separator, mapper, acc \\ [])
     defp intersperse_map([], _separator, _mapper, acc), do: acc
     defp intersperse_map([elem], _separator, mapper, acc), do: [acc | mapper.(elem)]
@@ -621,6 +925,10 @@ if Code.ensure_loaded?(Postgrex) do
     defp intersperse_reduce([elem | rest], separator, user_acc, reducer, acc) do
       {elem, user_acc} = reducer.(elem, user_acc)
       intersperse_reduce(rest, separator, user_acc, reducer, [acc, elem, separator])
+    end
+
+    defp if_do(condition, value) do
+      if condition, do: value, else: []
     end
 
     defp escape_string(value) when is_binary(value) do
