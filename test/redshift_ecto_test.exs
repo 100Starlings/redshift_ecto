@@ -292,8 +292,9 @@ defmodule RedshiftEctoTest do
 
     query = "schema" |> where(foo: <<0, ?a, ?b, ?c>>) |> select([], true) |> normalize
 
-    assert all(query) ==
-             ~s{SELECT TRUE FROM "schema" AS s0 WHERE (s0."foo" = '\\x00616263'::bytea)}
+    assert_raise Ecto.QueryError, ~r"The Redshift Adapter doesn't support binaries", fn ->
+      all(query)
+    end
 
     query = "schema" |> where(foo: 123) |> select([], true) |> normalize
     assert all(query) == ~s{SELECT TRUE FROM "schema" AS s0 WHERE (s0."foo" = 123)}
@@ -306,7 +307,7 @@ defmodule RedshiftEctoTest do
     query =
       Schema |> select([], type(^"601d74e4-a8d3-4b6e-8365-eddb4c893327", Ecto.UUID)) |> normalize
 
-    assert all(query) == ~s{SELECT $1::uuid FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT $1::char(36) FROM "schema" AS s0}
 
     query = Schema |> select([], type(^1, Custom.Permalink)) |> normalize
     assert all(query) == ~s{SELECT $1::bigint FROM "schema" AS s0}
@@ -944,7 +945,7 @@ defmodule RedshiftEctoTest do
 
     assert execute_ddl(create) == [
              """
-             CREATE TABLE "posts" ("id" serial,
+             CREATE TABLE "posts" ("id" integer,
              "category_0" bigint CONSTRAINT "posts_category_0_fkey" REFERENCES "categories"("id"),
              "category_1" bigint CONSTRAINT "foo_bar" REFERENCES "categories"("id"),
              "category_2" bigint CONSTRAINT "posts_category_2_fkey" REFERENCES "categories"("id"),
@@ -969,7 +970,7 @@ defmodule RedshiftEctoTest do
 
     assert execute_ddl(create) ==
              [
-               ~s|CREATE TABLE "posts" ("id" serial, "created_at" timestamp, PRIMARY KEY ("id")) WITH FOO=BAR|
+               ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) WITH FOO=BAR|
              ]
   end
 
@@ -997,7 +998,7 @@ defmodule RedshiftEctoTest do
          {:add, :a, :map, [default: %{}]}
        ]}
 
-    assert execute_ddl(create) == [~s|CREATE TABLE "posts" ("a" jsonb DEFAULT '{}')|]
+    assert execute_ddl(create) == [~s|CREATE TABLE "posts" ("a" varchar(max) DEFAULT '{}')|]
   end
 
   test "create table with a map column, and a map default with values" do
@@ -1008,7 +1009,7 @@ defmodule RedshiftEctoTest do
        ]}
 
     assert execute_ddl(create) == [
-             ~s|CREATE TABLE "posts" ("a" jsonb DEFAULT '{"foo":"bar","baz":"boom"}')|
+             ~s|CREATE TABLE "posts" ("a" varchar(max) DEFAULT '{"foo":"bar","baz":"boom"}')|
            ]
   end
 
@@ -1020,7 +1021,7 @@ defmodule RedshiftEctoTest do
        ]}
 
     assert execute_ddl(create) == [
-             ~s|CREATE TABLE "posts" ("a" jsonb DEFAULT '{"foo":"bar","baz":"boom"}')|
+             ~s|CREATE TABLE "posts" ("a" varchar(max) DEFAULT '{"foo":"bar","baz":"boom"}')|
            ]
   end
 
@@ -1120,7 +1121,7 @@ defmodule RedshiftEctoTest do
     assert execute_ddl(alter) == [
              """
              ALTER TABLE "posts"
-             ADD COLUMN "my_pk" serial,
+             ADD COLUMN "my_pk" integer,
              ADD PRIMARY KEY ("my_pk")
              """
              |> remove_newlines
@@ -1133,7 +1134,7 @@ defmodule RedshiftEctoTest do
     assert execute_ddl(alter) == [
              """
              ALTER TABLE "posts"
-             ADD COLUMN "my_pk" bigserial,
+             ADD COLUMN "my_pk" bigint,
              ADD PRIMARY KEY ("my_pk")
              """
              |> remove_newlines

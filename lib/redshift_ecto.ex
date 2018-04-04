@@ -25,6 +25,49 @@ defmodule RedshiftEcto do
 
   defdelegate extensions, to: Postgres
 
+  ## Custom Redshift types
+
+  @doc false
+  def autogenerate(:id), do: nil
+  def autogenerate(:embed_id), do: Ecto.UUID.generate()
+  def autogenerate(:binary_id), do: Ecto.UUID.generate()
+
+  @doc false
+  def loaders(:map, type), do: [&json_decode/1, type]
+  def loaders({:map, _}, type), do: [&json_decode/1, type]
+
+  def loaders({:embed, _} = type, _) do
+    [&json_decode/1, &Ecto.Adapters.SQL.load_embed(type, &1)]
+  end
+
+  def loaders(:binary_id, _type), do: [&{:ok, &1}]
+  def loaders(:uuid, Ecto.UUID), do: [&{:ok, &1}]
+  def loaders(_, type), do: [type]
+
+  defp json_decode(x) when is_binary(x) do
+    {:ok, Ecto.Adapter.json_library().decode!(x)}
+  end
+
+  defp json_decode(x), do: {:ok, x}
+
+  @doc false
+  def dumpers(:map, type), do: [type, &json_encode/1]
+  def dumpers({:map, _}, type), do: [type, &json_encode/1]
+
+  def dumpers({:embed, _} = type, _) do
+    [&Ecto.Adapters.SQL.dump_embed(type, &1), &json_encode/1]
+  end
+
+  def dumpers(:binary_id, _type), do: [&Ecto.UUID.cast/1]
+  def dumpers(:uuid, Ecto.UUID), do: [&Ecto.UUID.cast/1]
+  def dumpers(_, type), do: [type]
+
+  defp json_encode(%{} = x) do
+    {:ok, Ecto.Adapter.json_library().encode!(x)}
+  end
+
+  defp json_encode(x), do: {:ok, x}
+
   ## Storage API
 
   @doc false

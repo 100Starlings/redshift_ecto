@@ -476,9 +476,9 @@ if Code.ensure_loaded?(Postgrex) do
       Decimal.to_string(decimal, :normal)
     end
 
-    defp expr(%Ecto.Query.Tagged{value: binary, type: :binary}, _sources, _query)
+    defp expr(%Ecto.Query.Tagged{value: binary, type: :binary}, _sources, query)
          when is_binary(binary) do
-      ["'\\x", Base.encode16(binary, case: :lower) | "'::bytea"]
+      error!(query, "The Redshift Adapter doesn't support binaries")
     end
 
     defp expr(%Ecto.Query.Tagged{value: other, type: type}, sources, query) do
@@ -647,14 +647,15 @@ if Code.ensure_loaded?(Postgrex) do
     end
 
     defp ecto_to_db({:array, _}), do: error!(nil, "Array type is not supported by Redshift")
-    defp ecto_to_db(:id), do: "integer"
-    defp ecto_to_db(:serial), do: "serial"
-    defp ecto_to_db(:bigserial), do: "bigserial"
-    defp ecto_to_db(:binary_id), do: "uuid"
+    defp ecto_to_db(:id), do: "bigint"
+    defp ecto_to_db(:serial), do: "integer"
+    defp ecto_to_db(:bigserial), do: "bigint"
+    defp ecto_to_db(:binary_id), do: "char(36)"
+    defp ecto_to_db(:uuid), do: "char(36)"
     defp ecto_to_db(:string), do: "varchar"
-    defp ecto_to_db(:binary), do: "bytea"
-    defp ecto_to_db(:map), do: Application.fetch_env!(:ecto, :postgres_map_type)
-    defp ecto_to_db({:map, _}), do: Application.fetch_env!(:ecto, :postgres_map_type)
+    defp ecto_to_db(:binary), do: "varchar(max)"
+    defp ecto_to_db(:map), do: "varchar(max)"
+    defp ecto_to_db({:map, _}), do: "varchar(max)"
     defp ecto_to_db(:utc_datetime), do: "timestamp"
     defp ecto_to_db(:naive_datetime), do: "timestamp"
     defp ecto_to_db(other), do: Atom.to_string(other)
