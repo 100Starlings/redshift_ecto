@@ -1,4 +1,4 @@
-Code.require_file("../integration_test/support/types.exs", __DIR__)
+Code.require_file("../deps/ecto/integration_test/support/types.exs", __DIR__)
 
 defmodule RedshiftEctoTest do
   use ExUnit.Case
