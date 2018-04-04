@@ -47,14 +47,14 @@ if Code.ensure_loaded?(Postgrex) do
     end
 
     def update_all(%{from: from, select: nil} = query) do
-      sources = create_names(query)
-      {from, name} = get_source(query, sources, 0, from)
+      sources = sources_unaliased(query)
+      {from, _} = get_source(query, sources, 0, from)
 
       fields = update_fields(query, sources)
       {join, wheres} = using_join(query, :update_all, "FROM", sources)
       where = where(%{query | wheres: wheres ++ query.wheres}, sources)
 
-      ["UPDATE ", from, " AS ", name, " SET ", fields, join, where]
+      ["UPDATE ", from, " SET ", fields, join, where]
     end
 
     def update_all(_query) do
@@ -230,31 +230,12 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp using_join(%Query{joins: []}, _kind, _prefix, _sources), do: {[], []}
 
-    defp using_join(%Query{joins: joins} = query, :delete_all = kind, prefix, sources) do
+    defp using_join(%Query{joins: joins} = query, kind, prefix, sources) do
       froms =
         intersperse_map(joins, ", ", fn
           %JoinExpr{qual: :inner, ix: ix, source: source} ->
             {join, _} = get_source(query, sources, ix, source)
             join
-
-          %JoinExpr{qual: qual} ->
-            error!(query, "Redshift supports only inner joins on #{kind}, got: `#{qual}`")
-        end)
-
-      wheres =
-        for %JoinExpr{on: %QueryExpr{expr: value} = expr} <- joins,
-            value != true,
-            do: expr |> Map.put(:__struct__, BooleanExpr) |> Map.put(:op, :and)
-
-      {[?\s, prefix, ?\s | froms], wheres}
-    end
-
-    defp using_join(%Query{joins: joins} = query, kind, prefix, sources) do
-      froms =
-        intersperse_map(joins, ", ", fn
-          %JoinExpr{qual: :inner, ix: ix, source: source} ->
-            {join, name} = get_source(query, sources, ix, source)
-            [join, " AS " | name]
 
           %JoinExpr{qual: qual} ->
             error!(query, "Redshift supports only inner joins on #{kind}, got: `#{qual}`")

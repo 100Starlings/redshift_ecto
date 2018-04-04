@@ -466,18 +466,18 @@ defmodule RedshiftEctoTest do
 
   test "update all" do
     query = from(m in Schema, update: [set: [x: 0]]) |> normalize(:update_all)
-    assert update_all(query) == ~s{UPDATE "schema" AS s0 SET "x" = 0}
+    assert update_all(query) == ~s{UPDATE "schema" SET "x" = 0}
 
     query = from(m in Schema, update: [set: [x: 0], inc: [y: 1, z: -3]]) |> normalize(:update_all)
 
     assert update_all(query) ==
-             ~s{UPDATE "schema" AS s0 SET "x" = 0, "y" = s0."y" + 1, "z" = s0."z" + -3}
+             ~s{UPDATE "schema" SET "x" = 0, "y" = "schema"."y" + 1, "z" = "schema"."z" + -3}
 
     query = from(e in Schema, where: e.x == 123, update: [set: [x: 0]]) |> normalize(:update_all)
-    assert update_all(query) == ~s{UPDATE "schema" AS s0 SET "x" = 0 WHERE (s0."x" = 123)}
+    assert update_all(query) == ~s{UPDATE "schema" SET "x" = 0 WHERE ("schema"."x" = 123)}
 
     query = from(m in Schema, update: [set: [x: ^0]]) |> normalize(:update_all)
-    assert update_all(query) == ~s{UPDATE "schema" AS s0 SET "x" = $1}
+    assert update_all(query) == ~s{UPDATE "schema" SET "x" = $1}
 
     query =
       Schema
@@ -486,7 +486,7 @@ defmodule RedshiftEctoTest do
       |> normalize(:update_all)
 
     assert update_all(query) ==
-             ~s{UPDATE "schema" AS s0 SET "x" = 0 FROM "schema2" AS s1 WHERE (s0."x" = s1."z")}
+             ~s{UPDATE "schema" SET "x" = 0 FROM "schema2" WHERE ("schema"."x" = "schema2"."z")}
 
     query =
       from(
@@ -499,8 +499,7 @@ defmodule RedshiftEctoTest do
       |> normalize(:update_all)
 
     assert update_all(query) ==
-             ~s{UPDATE "schema" AS s0 SET "x" = 0 FROM "schema2" AS s1 } <>
-               ~s{WHERE (s0."x" = s1."z") AND (s0."x" = 123)}
+             ~s{UPDATE "schema" SET "x" = 0 FROM "schema2" WHERE ("schema"."x" = "schema2"."z") AND ("schema"."x" = 123)}
   end
 
   test "update all with returning" do
@@ -514,8 +513,7 @@ defmodule RedshiftEctoTest do
   test "update all with prefix" do
     query = from(m in Schema, update: [set: [x: 0]]) |> normalize(:update_all)
 
-    assert update_all(%{query | prefix: "prefix"}) ==
-             ~s{UPDATE "prefix"."schema" AS s0 SET "x" = 0}
+    assert update_all(%{query | prefix: "prefix"}) == ~s{UPDATE "prefix"."schema" SET "x" = 0}
   end
 
   test "delete all" do
