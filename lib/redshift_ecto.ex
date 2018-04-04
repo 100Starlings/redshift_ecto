@@ -41,7 +41,7 @@ defmodule RedshiftEcto do
       {:ok, _} ->
         :ok
 
-      {:error, "ERROR 42P04 (duplicate_database)" <> _} ->
+      {:error, %{postgres: %{code: :duplicate_database}}} ->
         {:error, :already_up}
 
       {:error, error} ->
@@ -61,7 +61,7 @@ defmodule RedshiftEcto do
       {:ok, _} ->
         :ok
 
-      {:error, "ERROR 3D000 (invalid_catalog_name)" <> _} ->
+      {:error, %{postgres: %{code: :invalid_catalog_name}}} ->
         {:error, :already_down}
 
       {:error, error} ->
