@@ -2,7 +2,7 @@
 
 [Ecto](https://github.com/elixir-ecto/ecto) Adapter for [AWS Redshift](https://aws.amazon.com/redshift/).
 
-This is aimed to be a Redshift compatibility layer on top Ecto's builtin [Postgres adapter](https://hexdocs.pm/ecto/Ecto.Adapters.Postgres.html). Starting with a basic implementation it delegates most functions to the Postgres adapter. This means that while basic statements and queries will work there will be others that don't. The goal is to fix each of these incompatibilities one at a time as they are discovered.
+This adapter is based on Ecto's builtin [Postgres adapter](https://hexdocs.pm/ecto/Ecto.Adapters.Postgres.html). It delegates some functions to it but changes the implementation of most that are incompatible with Redshift. The differences are detailed in the documentation.
 
 Documentation can be found at [https://hexdocs.pm/redshift_ecto](https://hexdocs.pm/redshift_ecto).
 
@@ -25,3 +25,7 @@ config :my_app, MyApp.Repo,
   adapter: RedshiftEcto,
   url: "ecto://user:pass@data-warehouse.abc123.us-east-1.redshift.amazonaws.com:5439/db"
 ```
+
+## Testing
+
+Redshift doesn't support nested transactions which makes the builtin sandbox implementation of Ecto unusable for testing. RedshiftEcto depends on [ecto_replay_sandbox](https://github.com/jumpn/ecto_replay_sandbox) which implements pseudo transactions that provides a similar experience in testing to the Ecto's sandbox. See the integration tests of the adapter for an example on how to use it.

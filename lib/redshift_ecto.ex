@@ -5,13 +5,29 @@ defmodule RedshiftEcto do
   It uses `postgrex` for communicating to the database and a connection pool,
   such as `poolboy`.
 
-  This adapter is built on top of Ecto's builtin `Ecto.Adapters.Postgres`
-  adapter. It delegates most functions to it only changing the implementation
-  of those that are incompatible with Redshift. The differences are detailed in
-  this documentation.
+  This adapter is based on Ecto's builtin `Ecto.Adapters.Postgres` adapter. It
+  delegates some functions to it but changes the implementation of most that
+  are incompatible with Redshift. The differences are detailed in this
+  documentation.
 
   We also recommend developers to consult the documentation of the
   [Postgres adapter](https://hexdocs.pm/ecto/Ecto.Adapters.Postgres.html).
+
+  ## Notable differences
+
+  * no array type
+  * maps are stored as json in `varchar(max)` columns
+  * the `:binary_id` and `:uuid` Ecto types are stored in `char(36)` and
+    generated as text
+  * no binary type and literal support
+  * no aliases in `UPDATE` and `DELETE FROM` statements
+  * no `RETURNING`
+  * no support for `on_conflict` (except for the default `:raise`)
+  * no support for `on_delete` and `on_update` on foreign key definitions
+  * no support for `ALTER COLUMN`
+  * no support for `CHECK` and `EXCLUDE` constraints
+  * since Redshift doesn't enforce uniqueness and foreign key constraints the
+    adapter can't report violations
   """
 
   # Inherit all behaviour from Ecto.Adapters.SQL
