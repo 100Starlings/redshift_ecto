@@ -1,7 +1,7 @@
 defmodule RedshiftEcto.MixProject do
   use Mix.Project
 
-  @version "0.1.0-dev"
+  @version "0.1.0"
 
   def project do
     [
@@ -19,7 +19,7 @@ defmodule RedshiftEcto.MixProject do
       preferred_cli_env: ["test.all": :test],
 
       # Hex
-      description: "Ecto Adapter for Redshift based on its built-in Postgres Adapter.",
+      description: "Ecto Adapter for Redshift.",
       package: package(),
 
       # Docs
