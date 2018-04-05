@@ -952,6 +952,145 @@ defmodule RedshiftEctoTest do
              ]
   end
 
+  test "create table with distribution style and key" do
+    create =
+      {:create, table(:posts, options: [diststyle: :even]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) DISTSTYLE EVEN|
+           ]
+
+    create =
+      {:create, table(:posts, options: [diststyle: :all]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) DISTSTYLE ALL|
+           ]
+
+    create =
+      {:create, table(:posts, options: [distkey: :id]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) DISTKEY ("id")|
+           ]
+
+    create =
+      {:create, table(:posts),
+       [
+         {:add, :id, :serial, [primary_key: true, distkey: true]},
+         {:add, :created_at, :naive_datetime, []}
+       ]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer DISTKEY, "created_at" timestamp, PRIMARY KEY ("id"))|
+           ]
+  end
+
+  test "create table with sortkeys" do
+    create =
+      {:create, table(:posts, options: [sortkey: :id]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) SORTKEY ("id")|
+           ]
+
+    create =
+      {:create, table(:posts, options: [sortkey: [:created_at, :id]]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) SORTKEY ("created_at", "id")|
+           ]
+
+    create =
+      {:create, table(:posts, options: [sortkey: {:interleaved, [:id, :created_at]}]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) INTERLEAVED SORTKEY ("id", "created_at")|
+           ]
+
+    create =
+      {:create, table(:posts),
+       [
+         {:add, :id, :serial, [primary_key: true, sortkey: true]},
+         {:add, :created_at, :naive_datetime, []}
+       ]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer SORTKEY, "created_at" timestamp, PRIMARY KEY ("id"))|
+           ]
+  end
+
+  test "create table with distribution style and sortkeys" do
+    create =
+      {:create, table(:posts, options: [diststyle: :even, sortkey: :id]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) DISTSTYLE EVEN SORTKEY ("id")|
+           ]
+
+    create =
+      {:create, table(:posts, options: [distkey: :id, sortkey: [:created_at, :id]]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) DISTKEY ("id") SORTKEY ("created_at", "id")|
+           ]
+
+    create =
+      {:create,
+       table(:posts, options: [sortkey: {:interleaved, [:id, :created_at]}, diststyle: :all]),
+       [{:add, :id, :serial, [primary_key: true]}, {:add, :created_at, :naive_datetime, []}]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer, "created_at" timestamp, PRIMARY KEY ("id")) INTERLEAVED SORTKEY ("id", "created_at") DISTSTYLE ALL|
+           ]
+
+    create =
+      {:create, table(:posts),
+       [
+         {:add, :id, :serial, [primary_key: true, sortkey: true, distkey: true]},
+         {:add, :created_at, :naive_datetime, []}
+       ]}
+
+    assert execute_ddl(create) == [
+             ~s|CREATE TABLE "posts" ("id" integer SORTKEY DISTKEY, "created_at" timestamp, PRIMARY KEY ("id"))|
+           ]
+  end
+
+  test "create columns with various options" do
+    create =
+      {:create, table(:posts),
+       [
+         {:add, :id, :serial, [primary_key: true, distkey: true, encode: :delta]},
+         {:add, :title, :string,
+          [size: 765, null: false, unique: true, sortkey: true, encode: :lzo]},
+         {:add, :counter, :serial, [identity: {0, 1}, encode: :delta]},
+         {:add, :views, :smallint, [default: 0, encode: :mostly8]},
+         {:add, :author, :string, [default: "anonymous", encode: :text255]},
+         {:add, :created_at, :naive_datetime, [encode: :zstd]}
+       ]}
+
+    assert execute_ddl(create) == [
+             """
+             CREATE TABLE "posts" ("id" integer DISTKEY ENCODE delta,
+             "title" varchar(765) NOT NULL UNIQUE SORTKEY ENCODE lzo,
+             "counter" integer IDENTITY(0,1) ENCODE delta,
+             "views" smallint DEFAULT 0 ENCODE mostly8,
+             "author" varchar(255) DEFAULT 'anonymous' ENCODE text255,
+             "created_at" timestamp ENCODE zstd,
+             PRIMARY KEY ("id"))
+             """
+             |> remove_newlines
+           ]
+  end
+
   test "create table with composite key" do
     create =
       {:create, table(:posts),

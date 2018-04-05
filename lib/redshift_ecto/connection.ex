@@ -746,13 +746,45 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp column_options(type, opts) do
       default = Keyword.fetch(opts, :default)
-      null = Keyword.get(opts, :null)
-      [default_expr(default, type), null_expr(null)]
+
+      {opts, _rest} =
+        Keyword.split(opts, [:identity, :encode, :distkey, :sortkey, :null, :unique])
+
+      [default_expr(default, type), Enum.map(opts, &column_option/1)]
     end
 
-    defp null_expr(false), do: " NOT NULL"
-    defp null_expr(true), do: " NULL"
-    defp null_expr(_), do: []
+    @compression_encodings [
+      :raw,
+      :bytedict,
+      :delta,
+      :delta32k,
+      :lzo,
+      :mostly8,
+      :mostly16,
+      :mostly32,
+      :runlength,
+      :text255,
+      :text32k,
+      :zstd
+    ]
+
+    defp column_option({:encode, encoding}) when encoding in @compression_encodings do
+      [" ENCODE ", to_string(encoding)]
+    end
+
+    defp column_option({:identity, {seed, step}}) when is_integer(seed) and is_integer(step) do
+      [" IDENTITY(", to_string(seed), ?,, to_string(step), ?)]
+    end
+
+    defp column_option({:distkey, true}), do: " DISTKEY"
+    defp column_option({:sortkey, true}), do: " SORTKEY"
+    defp column_option({:null, false}), do: " NOT NULL"
+    defp column_option({:null, true}), do: " NULL"
+    defp column_option({:unique, true}), do: " UNIQUE"
+
+    defp column_option(expr) do
+      error!(nil, "unrecognized column option `#{inspect(expr)}`")
+    end
 
     defp default_expr({:ok, nil}, _type), do: " DEFAULT NULL"
 
@@ -780,11 +812,36 @@ if Code.ensure_loaded?(Postgrex) do
     defp default_expr(:error, _), do: []
 
     defp options_expr(nil), do: []
-
-    defp options_expr(keyword) when is_list(keyword),
-      do: error!(nil, "PostgreSQL adapter does not support keyword lists in :options")
-
+    defp options_expr(keyword) when is_list(keyword), do: Enum.map(keyword, &table_attribute/1)
     defp options_expr(options), do: [?\s, options]
+
+    defp table_attribute({:diststyle, :even}), do: " DISTSTYLE EVEN"
+    defp table_attribute({:diststyle, :all}), do: " DISTSTYLE ALL"
+    defp table_attribute({:diststyle, :key}), do: " DISTSTYLE KEY"
+
+    defp table_attribute({:distkey, key}) when is_atom(key) or is_binary(key) do
+      [" DISTKEY (", quote_name(key), ?)]
+    end
+
+    defp table_attribute({:sortkey, key}) when is_atom(key) or is_binary(key) do
+      [" SORTKEY (", quote_name(key), ?)]
+    end
+
+    defp table_attribute({:sortkey, keys}) when is_list(keys) do
+      [" SORTKEY (", intersperse_map(keys, ", ", &quote_name/1), ?)]
+    end
+
+    defp table_attribute({:sortkey, {:compound, keys}}) do
+      [" COMPOUND", table_attribute({:sortkey, keys})]
+    end
+
+    defp table_attribute({:sortkey, {:interleaved, keys}}) do
+      [" INTERLEAVED", table_attribute({:sortkey, keys})]
+    end
+
+    defp table_attribute(table_attribute) do
+      error!(nil, "unrecognized table attribute `#{inspect(table_attribute)}`")
+    end
 
     defp column_type(type, opts) do
       size = Keyword.get(opts, :size)

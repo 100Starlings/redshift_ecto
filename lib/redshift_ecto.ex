@@ -1,9 +1,9 @@
 defmodule RedshiftEcto do
   @moduledoc """
-  Adapter module for Redshift.
+  Ecto adapter for [AWS Redshift](https://aws.amazon.com/redshift/).
 
-  It uses `postgrex` for communicating to the database and a connection pool,
-  such as `poolboy`.
+  It uses `Postgrex` for communicating to the database and a connection pool,
+  such as `DBConnection.Poolboy`.
 
   This adapter is based on Ecto's builtin `Ecto.Adapters.Postgres` adapter. It
   delegates some functions to it but changes the implementation of most that
@@ -28,6 +28,70 @@ defmodule RedshiftEcto do
   * no support for `CHECK` and `EXCLUDE` constraints
   * since Redshift doesn't enforce uniqueness and foreign key constraints the
     adapter can't report violations
+
+  ## Migrations
+
+  RedshiftEcto supports migrations with the exceptions of features that are not
+  supported by Redshift (see above). There are also some extra features in
+  migrations to help specify table attributes and column options available in
+  Redshift.
+
+  We highly recommend reading the
+  [Designing Tables](https://docs.aws.amazon.com/redshift/latest/dg/t_Creating_tables.html)
+  section from the AWS Redshift documentation.
+
+  ### Table options
+
+  While similarly to other adapters RedshiftEcto accepts table options as an
+  opaque string, it also supports a keyword list with the following options:
+
+  * `:diststyle`: data distribution style, possible values: `:even`, `:key`, `:all`
+  * `:distkey`: specify the column to be used as the distribution key
+  * `:sortkey`: specify one or more sort keys, the value can be a single column
+    name, a list of columns, or a 2-tuple where the first element is a sort
+    style specifier (`:compound` or `:interleaved`) and the second is a single
+    column name or a list of columns
+
+  #### Examples
+
+      create table("posts", options: [distkey: :id, sortkey: :title])
+      create table("categories", options: [diststyle: :all, sortkey: {:interleaved, [:name, :parent_id]}])
+      create table("reports", options: [diststyle: :even, sortkey: [:department, :year, :month]])
+
+  ### Column options
+
+  In addition to the column options accepted by `Ecto.Migration.add/3`
+  RedshiftEcto also accepts the following Redshift specific column options:
+
+  * `:identity`: specifies that the column is an identity column. The value must
+    be a tuple of two integers where the first is the `seed` and the second the
+    `step`. For example, `identity: {0, 1}` specifies that the values start from
+    `0` and increments by `1`. It's worth noting that identity columns may
+    behave differently in Redshift that one might be used to. See the [AWS
+    Redshift docs][identity] for more details.
+  * `:encode`: compression encoding for the column, possible values are lower
+    case atom version of the compression encodings supported by Redshift. Some
+    common values: `:zstd`, `:lzo`, `:delta`, `:bytedict`, `:raw`. See the [AWS
+    Redshift docs][encodings] for more.
+  * `:distkey`: specify the column as the distribution key (value must be `true`)
+  * `:sortkey`: specify the column as the single (compound) sort key of the table
+    (value must be `true`)
+  * `:unique`: specify that the column can contain only unique values. Note that
+    Redshift won't enforce uniqueness.
+
+  [identity]: https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_NEW.html#identity-clause
+  [encodings]: https://docs.aws.amazon.com/redshift/latest/dg/c_Compression_encodings.html
+
+  #### Examples
+
+      create table("posts") do
+        add :id, :serial, primary_key: true, distkey: true, encode: :delta
+        add :title, :string, size: 765, null: false, unique: true, sortkey: true, encode: :lzo
+        add :counter, :serial, identity: {0, 1}, encode: :delta,
+        add :views, :smallint, default: 0, encode: :mostly8,
+        add :author, :string, default: "anonymous", encode: :text255,
+        add :created_at, :naive_datetime, encode: :zstd
+      end
   """
 
   # Inherit all behaviour from Ecto.Adapters.SQL
