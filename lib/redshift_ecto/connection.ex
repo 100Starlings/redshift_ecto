@@ -520,10 +520,16 @@ if Code.ensure_loaded?(Postgrex) do
             {quoted, quoted, schema}
 
           {:fragment, _, _} ->
-            error!(nil, "Redshift doesn't support fragment sources in DELETE statements")
+            error!(
+              nil,
+              "Redshift doesn't support fragment sources in UPDATE and DELETE statements"
+            )
 
           %Ecto.SubQuery{} ->
-            error!(nil, "Redshift doesn't support subquery sources in DELETE statements")
+            error!(
+              nil,
+              "Redshift doesn't support subquery sources in UPDATE and DELETE statements"
+            )
         end
 
       [current | sources_unaliased(prefix, sources, pos + 1, limit)]
