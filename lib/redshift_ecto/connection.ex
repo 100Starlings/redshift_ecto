@@ -651,11 +651,8 @@ if Code.ensure_loaded?(Postgrex) do
       ]
     end
 
-    def execute_ddl({:create, %Constraint{} = constraint}) do
-      table_name = quote_table(constraint.prefix, constraint.table)
-      queries = [["ALTER TABLE ", table_name, " ADD ", new_constraint_expr(constraint)]]
-
-      queries ++ comments_on("CONSTRAINT", constraint.name, constraint.comment, table_name)
+    def execute_ddl({:create, %Constraint{}}) do
+      error!(nil, "CHECK and EXCLUDE constraints are not supported by Redshift")
     end
 
     def execute_ddl({:drop, %Constraint{} = constraint}) do
@@ -687,23 +684,6 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp comments_on(object, name, comment) do
       [["COMMENT ON ", object, ?\s, name, " IS ", single_quote(comment)]]
-    end
-
-    defp comments_on(_object, _name, nil, _table_name), do: []
-
-    defp comments_on(object, name, comment, table_name) do
-      [
-        [
-          "COMMENT ON ",
-          object,
-          ?\s,
-          quote_name(name),
-          " ON ",
-          table_name,
-          " IS ",
-          single_quote(comment)
-        ]
-      ]
     end
 
     defp comments_for_columns(table_name, columns) do
@@ -773,14 +753,6 @@ if Code.ensure_loaded?(Postgrex) do
     defp null_expr(false), do: " NOT NULL"
     defp null_expr(true), do: " NULL"
     defp null_expr(_), do: []
-
-    defp new_constraint_expr(%Constraint{check: check}) when is_binary(check) do
-      error!(nil, "CHECK constraints are not supported by Redshift")
-    end
-
-    defp new_constraint_expr(%Constraint{exclude: exclude}) when is_binary(exclude) do
-      error!(nil, "EXCLUDE constraints are not supported by Redshift")
-    end
 
     defp default_expr({:ok, nil}, _type), do: " DEFAULT NULL"
 

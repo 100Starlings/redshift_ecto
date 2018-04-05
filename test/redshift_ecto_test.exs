@@ -1125,17 +1125,17 @@ defmodule RedshiftEctoTest do
   test "create check constraint" do
     create = {:create, constraint(:products, "price_must_be_positive", check: "price > 0")}
 
-    assert_raise ArgumentError, "CHECK constraints are not supported by Redshift", fn ->
-      execute_ddl(create)
-    end
+    assert_raise ArgumentError,
+                 "CHECK and EXCLUDE constraints are not supported by Redshift",
+                 fn -> execute_ddl(create) end
   end
 
   test "create exclusion constraint" do
     create = {:create, constraint(:products, "price_must_be_positive", exclude: "")}
 
-    assert_raise ArgumentError, "EXCLUDE constraints are not supported by Redshift", fn ->
-      execute_ddl(create)
-    end
+    assert_raise ArgumentError,
+                 "CHECK and EXCLUDE constraints are not supported by Redshift",
+                 fn -> execute_ddl(create) end
   end
 
   test "drop constraint" do
