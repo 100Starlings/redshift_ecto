@@ -309,7 +309,7 @@ defmodule RedshiftEctoTest do
 
     assert all(query) == ~s{SELECT $1::char(36) FROM "schema" AS s0}
 
-    query = Schema |> select([], type(^1, Custom.Permalink)) |> normalize
+    query = Schema |> select([], type(^1, CustomPermalink)) |> normalize
     assert all(query) == ~s{SELECT $1::bigint FROM "schema" AS s0}
   end
 
