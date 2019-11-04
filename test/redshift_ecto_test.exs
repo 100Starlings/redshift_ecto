@@ -54,7 +54,7 @@ defmodule RedshiftEctoTest do
   end
 
   defp normalize(query, operation \\ :all, counter \\ 0) do
-    {query, _params, _key} = Ecto.Query.Planner.prepare(query, operation, RedshiftEcto, counter)
+    {query, _params, _key} = Ecto.Query.Planner.plan(query, operation, RedshiftEcto)
     {query, _} = Ecto.Query.Planner.normalize(query, operation, RedshiftEcto, counter)
     query
   end
@@ -94,7 +94,7 @@ defmodule RedshiftEctoTest do
     assert_raise Ecto.QueryError,
                  ~r"Redshift does not support selecting all fields from \"posts\" without a schema",
                  fn ->
-                   all from(p in "posts", select: p) |> normalize()
+                   all(from(p in "posts", select: p) |> normalize())
                  end
   end
 
@@ -405,8 +405,8 @@ defmodule RedshiftEctoTest do
     query =
       "schema"
       |> select([m], {m.id, ^true})
-      |> join(:inner, [], Schema2, fragment("?", ^true))
-      |> join(:inner, [], Schema2, fragment("?", ^false))
+      |> join(:inner, [], Schema2, on: fragment("?", ^true))
+      |> join(:inner, [], Schema2, on: fragment("?", ^false))
       |> where([], fragment("?", ^true))
       |> where([], fragment("?", ^false))
       |> having([], fragment("?", ^true))
@@ -481,7 +481,7 @@ defmodule RedshiftEctoTest do
 
     query =
       Schema
-      |> join(:inner, [p], q in Schema2, p.x == q.z)
+      |> join(:inner, [p], q in Schema2, on: p.x == q.z)
       |> update([_], set: [x: 0])
       |> normalize(:update_all)
 
@@ -523,7 +523,10 @@ defmodule RedshiftEctoTest do
     query = from(e in Schema, where: e.x == 123) |> normalize
     assert delete_all(query) == ~s{DELETE FROM "schema" WHERE ("schema"."x" = 123)}
 
-    query = Schema |> join(:inner, [p], q in Schema2, p.x == q.z) |> normalize
+    query =
+      Schema
+      |> join(:inner, [p], q in Schema2, on: p.x == q.z)
+      |> normalize
 
     assert delete_all(query) ==
              ~s{DELETE FROM "schema" USING "schema2" WHERE ("schema"."x" = "schema2"."z")}
@@ -557,15 +560,19 @@ defmodule RedshiftEctoTest do
   ## Joins
 
   test "join" do
-    query = Schema |> join(:inner, [p], q in Schema2, p.x == q.z) |> select([], true) |> normalize
+    query =
+      Schema
+      |> join(:inner, [p], q in Schema2, on: p.x == q.z)
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              ~s{SELECT TRUE FROM "schema" AS s0 INNER JOIN "schema2" AS s1 ON s0."x" = s1."z"}
 
     query =
       Schema
-      |> join(:inner, [p], q in Schema2, p.x == q.z)
-      |> join(:inner, [], Schema, true)
+      |> join(:inner, [p], q in Schema2, on: p.x == q.z)
+      |> join(:inner, [], Schema, on: true)
       |> select([], true)
       |> normalize
 
@@ -575,7 +582,11 @@ defmodule RedshiftEctoTest do
   end
 
   test "join with nothing bound" do
-    query = Schema |> join(:inner, [], q in Schema2, q.z == q.z) |> select([], true) |> normalize
+    query =
+      Schema
+      |> join(:inner, [], q in Schema2, on: q.z == q.z)
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              ~s{SELECT TRUE FROM "schema" AS s0 INNER JOIN "schema2" AS s1 ON s1."z" = s1."z"}
@@ -583,7 +594,10 @@ defmodule RedshiftEctoTest do
 
   test "join without schema" do
     query =
-      "posts" |> join(:inner, [p], q in "comments", p.x == q.z) |> select([], true) |> normalize
+      "posts"
+      |> join(:inner, [p], q in "comments", on: p.x == q.z)
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              ~s{SELECT TRUE FROM "posts" AS p0 INNER JOIN "comments" AS c1 ON p0."x" = c1."z"}
@@ -594,7 +608,7 @@ defmodule RedshiftEctoTest do
 
     query =
       "comments"
-      |> join(:inner, [c], p in subquery(posts), true)
+      |> join(:inner, [c], p in subquery(posts), on: true)
       |> select([_, p], p.x)
       |> normalize
 
@@ -606,7 +620,7 @@ defmodule RedshiftEctoTest do
 
     query =
       "comments"
-      |> join(:inner, [c], p in subquery(posts), true)
+      |> join(:inner, [c], p in subquery(posts), on: true)
       |> select([_, p], p)
       |> normalize
 
@@ -616,7 +630,11 @@ defmodule RedshiftEctoTest do
   end
 
   test "join with prefix" do
-    query = Schema |> join(:inner, [p], q in Schema2, p.x == q.z) |> select([], true) |> normalize
+    query =
+      Schema
+      |> join(:inner, [p], q in Schema2, on: p.x == q.z)
+      |> select([], true)
+      |> normalize
 
     assert all(%{query | prefix: "prefix"}) ==
              ~s{SELECT TRUE FROM "prefix"."schema" AS s0 INNER JOIN "prefix"."schema2" AS s1 ON s0."x" = s1."z"}
@@ -643,7 +661,7 @@ defmodule RedshiftEctoTest do
   test "join with fragment and on defined" do
     query =
       Schema
-      |> join(:inner, [p], q in fragment("SELECT * FROM schema2"), q.id == p.id)
+      |> join(:inner, [p], q in fragment("SELECT * FROM schema2"), on: q.id == p.id)
       |> select([p], {p.id, ^0})
       |> normalize
 
@@ -697,7 +715,11 @@ defmodule RedshiftEctoTest do
   describe "query interpolation parameters" do
     test "self join on subquery" do
       subquery = select(Schema, [r], %{x: r.x, y: r.y})
-      query = subquery |> join(:inner, [c], p in subquery(subquery), true) |> normalize
+
+      query =
+        subquery
+        |> join(:inner, [c], p in subquery(subquery), on: true)
+        |> normalize
 
       assert all(query) ==
                ~s{SELECT s0."x", s0."y" FROM "schema" AS s0 INNER JOIN } <>
@@ -707,7 +729,11 @@ defmodule RedshiftEctoTest do
 
     test "self join on subquery with fragment" do
       subquery = select(Schema, [r], %{string: fragment("downcase(?)", ^"string")})
-      query = subquery |> join(:inner, [c], p in subquery(subquery), true) |> normalize
+
+      query =
+        subquery
+        |> join(:inner, [c], p in subquery(subquery), on: true)
+        |> normalize
 
       assert all(query) ==
                ~s{SELECT downcase($1) FROM "schema" AS s0 INNER JOIN } <>
@@ -720,7 +746,7 @@ defmodule RedshiftEctoTest do
       query =
         Schema
         |> select([r], %{y: ^666})
-        |> join(:inner, [c], p in subquery(subquery), true)
+        |> join(:inner, [c], p in subquery(subquery), on: true)
         |> where([a, b], a.x == ^111)
         |> normalize
 
@@ -734,14 +760,22 @@ defmodule RedshiftEctoTest do
   ## Associations
 
   test "association join belongs_to" do
-    query = Schema2 |> join(:inner, [c], p in assoc(c, :post)) |> select([], true) |> normalize
+    query =
+      Schema2
+      |> join(:inner, [c], p in assoc(c, :post))
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              "SELECT TRUE FROM \"schema2\" AS s0 INNER JOIN \"schema\" AS s1 ON s1.\"x\" = s0.\"z\""
   end
 
   test "association join has_many" do
-    query = Schema |> join(:inner, [p], c in assoc(p, :comments)) |> select([], true) |> normalize
+    query =
+      Schema
+      |> join(:inner, [p], c in assoc(p, :comments))
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              "SELECT TRUE FROM \"schema\" AS s0 INNER JOIN \"schema2\" AS s1 ON s1.\"z\" = s0.\"x\""
@@ -749,7 +783,10 @@ defmodule RedshiftEctoTest do
 
   test "association join has_one" do
     query =
-      Schema |> join(:inner, [p], pp in assoc(p, :permalink)) |> select([], true) |> normalize
+      Schema
+      |> join(:inner, [p], pp in assoc(p, :permalink))
+      |> select([], true)
+      |> normalize
 
     assert all(query) ==
              "SELECT TRUE FROM \"schema\" AS s0 INNER JOIN \"schema3\" AS s1 ON s1.\"id\" = s0.\"y\""
@@ -1126,7 +1163,7 @@ defmodule RedshiftEctoTest do
        ]}
 
     assert execute_ddl(create) == [
-             ~s|CREATE TABLE "posts" ("a" varchar(max) DEFAULT '{"foo":"bar","baz":"boom"}')|
+             ~s|CREATE TABLE "posts" ("a" varchar(max) DEFAULT '{"baz":"boom","foo":"bar"}')|
            ]
   end
 

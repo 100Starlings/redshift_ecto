@@ -515,7 +515,7 @@ if Code.ensure_loaded?(Postgrex) do
     defp sources_unaliased(prefix, sources, pos, limit) when pos < limit do
       current =
         case elem(sources, pos) do
-          {table, schema} ->
+          {table, schema, _alias} ->
             quoted = quote_table(prefix, table)
             {quoted, quoted, schema}
 
@@ -546,7 +546,7 @@ if Code.ensure_loaded?(Postgrex) do
     defp create_names(prefix, sources, pos, limit) when pos < limit do
       current =
         case elem(sources, pos) do
-          {table, schema} ->
+          {table, schema, _alias} ->
             name = [create_alias(table) | Integer.to_string(pos)]
             {quote_table(prefix, table), name, schema}
 
@@ -795,7 +795,7 @@ if Code.ensure_loaded?(Postgrex) do
       do: [" DEFAULT ", to_string(literal)]
 
     defp default_expr({:ok, %{} = map}, :map) do
-      default = Ecto.Adapter.json_library().encode!(map)
+      default = json_library().encode!(map)
       [" DEFAULT ", single_quote(default)]
     end
 
@@ -990,6 +990,11 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp error!(query, message) do
       raise Ecto.QueryError, query: query, message: message
+    end
+
+    defp json_library do
+      Application.get_env(:postgrex, :json_library) ||
+        raise "REPLACE WITH BETTER ERROR ABOUT CONFIGURING JSON LIBRARY"
     end
   end
 end
