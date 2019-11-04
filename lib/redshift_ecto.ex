@@ -95,7 +95,7 @@ defmodule RedshiftEcto do
   """
 
   # Inherit all behaviour from Ecto.Adapters.SQL
-  use Ecto.Adapters.SQL, :postgrex
+  use Ecto.Adapters.SQL, driver: :postgrex, migration_lock: nil
 
   alias Ecto.Adapters.Postgres
 
